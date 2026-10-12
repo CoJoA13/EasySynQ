@@ -76,7 +76,7 @@ The independent review approved this exact context-local semantic sanction. The 
 ## Task 1: Leading-compression IPv6 with slice controls
 
 - [x] Add separate disposable fixture repos/cases producing tokens by joining `::` to synthetic `abcd`, colon-joined components `ffff`, `c0a8`, `0101`, and numeric `2`. Assert exit 1 and the IPv6 diagnostic for bare text, quoted text, and URI-bracketed/port forms. Require file/line diagnostics and no clean verdict.
-- [x] Add passing fixtures for unspecified/loopback forms and indexed slices with numeric, signed numeric, spaced, identifier, call receiver, and nested index receiver contexts. Pin expression steps with `values[::2 + 1]`, `values[::f()]`, `values[::(2 + 1)]`, `values[::f(2 + 1)]`, and `values[::f((2 + 1))]`; include multiple slice spans on one line. Include ordinary three-field slices with explicit start/stop, existing documentation-prefix, expanded loopback, ordinary time/ratio, and sanctioned MAC controls. Unsanctioned full-group addresses are rejection controls, not passing fixtures.
+- [x] Add passing fixtures for unspecified/loopback forms and indexed slices with numeric, signed numeric, spaced, identifier, call receiver, and nested index receiver contexts. Pin expression steps with <code>values[&#58;&#58;2 + 1]</code>, <code>values[&#58;&#58;f()]</code>, <code>values[&#58;&#58;(2 + 1)]</code>, <code>values[&#58;&#58;f(2 + 1)]</code>, and <code>values[&#58;&#58;f((2 + 1))]</code>; include multiple slice spans on one line. Include ordinary three-field slices with explicit start/stop, existing documentation-prefix, expanded loopback, ordinary time/ratio, and sanctioned MAC controls. Unsanctioned full-group addresses are rejection controls, not passing fixtures.
 - [x] Add every expression-step fixture plus a generated rejected address on the same line; require only the address's IPv6 diagnostic and correct line. Add two addresses on one line, a URI-bracketed address after a slice, and identifier-adjacent/overlong hex-group controls. Add bracket-like fragments that fail the receiver or step whitelist/balance rules; any contained eligible address must remain detectable. Do not mask text outside the recognized span.
 - [x] Add named pure-hex rejected fixtures with exactly one terminal period at end-of-line and before spaces/tabs. Generate address and period separately; assert exit 1, the IPv6 rule, correct line, and the complete address token without the prose period. Repeat both punctuation contexts after a recognized arithmetic/call slice, then with a second neighboring rejected address; both addresses must remain reported. Add a valid mapped documentation token with terminal period, an unsanctioned mapped neighbor with terminal period, repeated terminal dots, an overlong hex group with terminal period, and malformed mapped candidates with internal/trailing dots. Require sanctioned mapped content to stay clean, its unsafe neighbor to remain rejected by IPv4, and every malformed/repeated-dot control to produce no shortened pure-hex IPv6 match. Preserve the previously specified bare/quoted/URI and identifier controls.
 - [x] Add dotted mapped documentation fixtures matching the existing source cases at `test_deploy_configuration.py:443` and `:469`, constructed from the compression marker, mapped-group component, and split documentation octets. Assert exit 0 and no IPv6 partial-prefix diagnostic for bare, quoted, and URI-bracketed forms, including uppercase mapped-group spelling and the existing invalid-octet documentation control. Add neighboring unsanctioned dotted endpoints assembled from split octets; require IPv4 rejection and no partial-prefix IPv6 diagnostic. On one line, combine an expression slice, a sanctioned mapped endpoint, and an unsanctioned mapped endpoint; require the unsafe endpoint to survive both masks. Add overlong/malformed dotted token controls that prohibit shorter pure-hex extraction.
@@ -145,3 +145,42 @@ A later PR review reproduced ordinary prose being classified as an indexed slice
 - Two sparse progress fixtures gain explicit semicolon framing without reducing their long padding, Unicode content, token inventory, diagnostic assertions or five-second limits. The small control uses byte-equivalent string assembly so the raw fixture source also has a recognized source cue.
 
 This is a bounded lexical recognizer, not a Python parser. Prose deliberately spelling an accepted source expression remains ambiguous; unsupported receiver spellings may require review. The package-context qualifier and other scanner rules are unchanged. Fresh expanded harness, all eight bounded progress cases, eight-lock and full-tree checks must verify the changed helper. The earlier 4.45-fold comparison remains historical for its exact source pair; no current speedup is inferred from it.
+
+## Literal-context amendment (2026-10-12 UTC)
+
+A subsequent review reproduced bracketed addresses being hidden inside quoted messages and
+Markdown bullets. The earlier receiver amendment's quote/backtick witnesses are superseded by
+this bounded, same-physical-line contract:
+
+- A source frame must start at the original line boundary and match a complete supported
+  expression prefix. Assignment, bounded calls/groups, keyword arguments and the measured
+  structured loop prelude remain supported. Arbitrary prose punctuation cannot create a frame.
+- Single/double quoted tokens preserve their literal contents for address scanning. Backticks and
+  hash comments also leave their contents visible. A quoted ordinary index can still establish
+  provenance for a genuine later slice; brackets inside its quoted key are not index delimiters.
+- Every unquoted semicolon, including one before the first bracket, requires a completed supported
+  statement before starting another frame. Unsupported or malformed index bodies cannot provide
+  that completion proof. Expression/group and index recognition remain explicitly bounded.
+- The original 17 source-slice controls and original 952 assertion outcomes remain required.
+  The later backtick-positive control intentionally becomes an exact-token rejection. Raw test
+  source strings are assembled from separate marker components while preserving generated inputs.
+- Three progress fixtures receive reviewed framing or placement amendments. Both sparse cases
+  use complete quoted assignments with a blank after each endpoint period inside the quote.
+  The malformed-density case keeps all 512 malformed fragments and both endpoints on line one,
+  with its unchanged nested source fragment on line two. Focused same-line controls retain the
+  nested-slice and no-recovery checks. Workload sizes and five-second limits remain unchanged.
+
+The five historical inline examples above now use HTML code elements and colon character
+references. Each decodes to the exact former example; the surrounding checklist and explanation
+are unchanged. This representation amendment preserves their rendered meaning, with original
+bytes retained in Git and the review evidence. All earlier execution results remain historical.
+
+The scanner still receives selected physical lines independently. It cannot infer strings or
+fences opened on an earlier line, and source-shaped text identical to a supported expression
+remains ambiguous. This amendment does not claim general language parsing or complete multiline
+literal recognition. The package qualifier, IPv4 rules and token consumer are unchanged.
+
+Required fresh evidence is the expanded regression suite, all eight existing bounded progress
+cases, the new 2,048-group literal-density case, the exact 65,536-character call-root probe,
+eight selected locks and the full tracked tree under 30 seconds. Independent implementation and
+final evidence reviews, normal commit hooks and current-head CI remain publication/merge gates.

@@ -230,82 +230,355 @@ hits="$(scan_ipv4 \
 # bracket span, never the line, before matching additional leading-compression candidates.
 # Sanctioned: RFC 3849 documentation prefix, expanded loopback, and exact bare loopback/unspecified.
 mask_leading_slice_spans() {
-  # Only ASCII bracket/step syntax is interpreted. Pass other bytes through in chunks; keeping
-  # byte offsets local avoids repeatedly walking UTF-8 prose and leaves the caller's locale intact.
+  # Recognize bounded source prefixes on this physical line. Literals/comments keep their bytes;
+  # code-shaped bare prefixes remain ambiguous. No previous unselected line supplies context.
+  # Fixed byte windows and constant-size contexts avoid copying the full suffix at each event.
   local LC_ALL=C
-  local rest="$1" prefix before inside step previous=''
-  local first_chunk=1 previous_qualified=0 root_qualified
+  local line="$1" line_length cursor=0 window_base=0 window prefix event probe inside step opaque kind norm pattern_front
+  local view next_base peek_cursor peek_base=-1 peek_window='' peek_view peek_prefix close_cursor
+  local quote_escape quote_closed quote_prefix_pattern
+  local context='' last_receiver=0 loop_frame=0 index_depth=0
+  local -a parent_context parent_loop index_fields index_omitted receiver complete pending
+  local -a body_receiver body_complete body_pending expression roots opener normalized
+  local -a prefix_parts=() inside_parts
+  line_length=${#line}
+  window="${line:0:4096}"
   local slice='^[[:blank:]]*:[[:blank:]]*:[[:blank:]]*(.+)$'
   local step_chars='^[A-Za-z0-9_.[:blank:]+*/%,()-]+$'
   local plain='[A-Za-z0-9_.[:blank:]+*/%,-]'
   local one_level="\(${plain}*\)"
   local two_levels="\((${plain}|${one_level})*\)"
   local balanced="^(${plain}|${two_levels})*$"
+  local blank='[[:blank:]]*'
   local identifier='[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*'
-  local root="(${identifier}([[:blank:]]*${two_levels})?|${two_levels})"
-  local witness='[=({,;+*/%&|^~<>"`-]|\['
-  witness="${witness}|'"
-  local initial_receiver="^[[:blank:]]*${root}[[:blank:]]*$"
-  local framed_receiver="(${witness})[[:blank:]]*${root}[[:blank:]]*$"
-  while [[ "$rest" == *'['* ]]; do
-    prefix="${rest%%\[*}"
-    rest="${rest:$((${#prefix}+1))}"
-    printf '%s' "$prefix"
-    if [[ "$rest" != *']'* ]]; then
-      printf '[%s\n' "$rest"
-      return
-    fi
-    # A whitespace boundary between prose words is not a source witness. Identify the complete
-    # root after indentation or explicit expression punctuation, including call/group receivers.
-    # Only the first original chunk can use line start; emitted chunks cannot invent that cue.
-    if [[ "$prefix" =~ ^(.*[^[:blank:]])[[:blank:]]*$ ]]; then
-      before="${BASH_REMATCH[1]}"
+  local number='[+-]?[0-9]+'
+  local binary='[+*/%&|^<>-]'
+  # Consumed atoms become a separated number, preserving token boundaries and atom kind.
+  # Expand only two group levels; unfinished calls likewise have at most two open groups.
+  local atom0="(${identifier}|${number})"
+  local expr0="${atom0}(${blank}${binary}${blank}${atom0})*"
+  local group1="\(${blank}(${expr0}(${blank},${blank}${expr0})*)?${blank}\)"
+  local atom1="(${atom0}|(${identifier}${blank})?${group1})"
+  local expr1="${atom1}(${blank}${binary}${blank}${atom1})*"
+  local group2="\(${blank}(${expr1}(${blank},${blank}${expr1})*)?${blank}\)"
+  local atom2="(${atom0}|(${identifier}${blank})?${group2})"
+  local expr2="${atom2}(${blank}${binary}${blank}${atom2})*"
+  local assignment="(${identifier}${blank}=${blank})?"
+  local keyword="(${identifier}${blank}=${blank})?"
+  local for_prefix="for[[:blank:]]+${identifier}[[:blank:]]+in[[:blank:]]+"
+  local introduction="(${identifier}${blank}=${blank}|${for_prefix})?"
+  local open1="(${identifier}${blank})?\(${blank}((${keyword}${expr1})${blank},${blank})*"
+  local open2="${open1}(${expr1}${blank}${binary}${blank})?(${identifier}${blank})?\(${blank}((${keyword}${expr0})${blank},${blank})*"
+  expression=("$expr2" "$expr1" "$expr0")
+  roots=("(${identifier}(${blank}${group2})?|${group2})" \
+    "(${identifier}(${blank}${group1})?|${group1})" "$identifier")
+  opener=('' "$open1" "$open2")
+  normalized=('0 ' 'f(0 ' 'f(f(0 ')
+  for kind in 0 1 2; do
+    if [ "$kind" -eq 0 ]; then
+      pattern_front=''
+      body_receiver[kind]="^${blank}(${expr2}${blank}${binary}${blank})?${roots[kind]}${blank}$"
+      body_complete[kind]="^${blank}${expr2}${blank}$"
+      body_pending[kind]="^${blank}(${expr2}${blank}${binary}${blank})?$"
+      receiver[kind]="^${blank}${assignment}(${expr2}${blank}${binary}${blank})?${roots[kind]}${blank}$"
+      complete[kind]="^${blank}${assignment}${expr2}${blank}$"
+      pending[kind]="^${blank}${assignment}(${expr2}${blank}${binary}${blank})?$"
     else
-      before=''
+      pattern_front="(${expr2}${blank}${binary}${blank})?${opener[kind]}"
+      body_receiver[kind]="^${blank}${pattern_front}(${expression[kind]}${blank}${binary}${blank})?${keyword}${roots[kind]}${blank}$"
+      body_complete[kind]="^${blank}${pattern_front}${keyword}${expression[kind]}${blank}$"
+      body_pending[kind]="^${blank}${pattern_front}(${expression[kind]}${blank}${binary}${blank})?${keyword}$"
+      receiver[kind]="^${blank}${introduction}${pattern_front}(${expression[kind]}${blank}${binary}${blank})?${keyword}${roots[kind]}${blank}$"
+      complete[kind]="^${blank}${introduction}${pattern_front}${keyword}${expression[kind]}${blank}$"
+      pending[kind]="^${blank}${introduction}${pattern_front}(${expression[kind]}${blank}${binary}${blank})?${keyword}$"
     fi
-    root_qualified=0
-    if [[ -z "$before" ]]; then
-      # An original closed bracket carries receiver provenance through adjacent/spaced chains.
-      if [[ "$previous" == ']' && "$previous_qualified" == 1 ]]; then
-        root_qualified=1
+  done
+  # Most events need no group expansion. Keep these short predicates on the common path.
+  local fast_root="${identifier}(${blank}\(${blank}\))?"
+  local fast_receiver="^${blank}${assignment}(${expr0}${blank}${binary}${blank})?${fast_root}${blank}$"
+  local fast_complete="^${blank}${assignment}${expr0}${blank}$"
+  local fast_pending="^${blank}${assignment}(${expr0}${blank}${binary}${blank})?$"
+  local fast_body_receiver="^${blank}(${expr0}${blank}${binary}${blank})?${fast_root}${blank}$"
+  local fast_body_complete="^${blank}${expr0}${blank}$"
+  local fast_body_pending="^${blank}(${expr0}${blank}${binary}${blank})?$"
+  local event_pattern="^([^][\"'\`#;:]*)([][\"'\`#;:])"
+  local double_body='^(([^"\\]|\\.)*")'
+  local single_body="^(([^'\\\\]|\\\\.)*')"
+  local double_prefix='^(([^"\\]|\\.)*)'
+  local single_prefix="^(([^'\\\\]|\\\\.)*)"
+  local quote_pattern match_kind
+  while [ "$cursor" -lt "$line_length" ]; do
+    if [ "$cursor" -ge "$((window_base + ${#window}))" ]; then
+      next_base=$(((cursor / 4096) * 4096))
+      if [ "$next_base" -eq "$peek_base" ]; then
+        window="$peek_window"
+      else
+        window="${line:next_base:4096}"
       fi
-    elif [[ "$before" =~ $framed_receiver ]] \
-      || [[ "$first_chunk" == 1 && "$before" =~ $initial_receiver ]] \
-      || [[ "$previous" == '[' && "$previous_qualified" == 1 && "$before" =~ $initial_receiver ]]; then
-      root_qualified=1
+      window_base="$next_base"
     fi
-    first_chunk=0
-    inside="${rest%%]*}"
-    if [[ "$root_qualified" == 1 ]]; then
-      if [[ "$inside" =~ $slice ]]; then
-        step="${BASH_REMATCH[1]}"
-        # The fixed-depth grammar admits exactly balanced groups up to depth two. Keep the
-        # separate whitelist/non-whitespace predicates, including their empty-step behavior.
-        if [[ "$step" =~ $step_chars && "$step" =~ [^[:blank:]] && "$step" =~ $balanced ]]; then
-          printf '%s' '[<python-slice>]'
-          rest="${rest:$((${#inside}+1))}"
-          previous=']'
-          previous_qualified=1
-          continue
-        fi
-      fi
-    fi
-    # Preserve a nonnested ordinary index verbatim and carry only its original root's proof.
-    # Addresses inside it remain visible to the consumer, including unqualified prose chains.
-    if [[ "$inside" != *'['* ]]; then
-      printf '[%s]' "$inside"
-      rest="${rest:$((${#inside}+1))}"
-      previous=']'
-      previous_qualified="$root_qualified"
+    view="${window:$((cursor - window_base))}"
+    if [[ ! "$view" =~ $event_pattern ]]; then
+      printf '%s' "$view"
+      prefix_parts+=("$view")
+      cursor=$((cursor + ${#view}))
       continue
     fi
-    # An invalid outer bracket may contain a valid inner slice, so consume only its opener.
-    # That unresolved opener is a container cue only when its own root was source-qualified.
-    printf '%s' '['
-    previous='['
-    previous_qualified="$root_qualified"
+    prefix="${BASH_REMATCH[1]}"
+    event="${BASH_REMATCH[2]}"
+    cursor=$((cursor + ${#prefix} + 1))
+    printf '%s' "$prefix"
+    if [ "${#prefix_parts[@]}" -gt 0 ]; then
+      prefix_parts+=("$prefix")
+      printf -v prefix '%s' "${prefix_parts[@]}"
+      prefix_parts=()
+    fi
+    probe="${context}${prefix}"
+    case "$event" in
+      '#'|'`')
+        # Comments and code-span formatting provide no executable receiver provenance.
+        printf '%s%s\n' "$event" "${line:cursor}"
+        return
+        ;;
+      '"'|"'")
+        # Two cached bytes suffice for a triple opener, including either boundary split.
+        peek_cursor="$cursor"
+        peek_base="$window_base"
+        peek_window="$window"
+        opaque=''
+        while [ "${#opaque}" -lt 2 ] && [ "$peek_cursor" -lt "$line_length" ]; do
+          if [ "$peek_cursor" -ge "$((peek_base + ${#peek_window}))" ]; then
+            peek_base=$(((peek_cursor / 4096) * 4096))
+            peek_window="${line:peek_base:4096}"
+          fi
+          peek_view="${peek_window:$((peek_cursor - peek_base)):$((2 - ${#opaque}))}"
+          opaque+="$peek_view"
+          peek_cursor=$((peek_cursor + ${#peek_view}))
+        done
+        if [[ ( "$event" == '"' && "$opaque" == '""' ) \
+          || ( "$event" == "'" && "$opaque" == "''" ) ]]; then
+          printf '%s%s\n' "$event" "${line:cursor}"
+          return
+        fi
+        match_kind=-1
+        if [[ ( "$index_depth" == 0 && "$probe" =~ $fast_pending ) \
+          || ( "$index_depth" != 0 && "$probe" =~ $fast_body_pending ) ]]; then
+          match_kind=0
+        else
+          for kind in 0 1 2; do
+            if [[ ( "$index_depth" == 0 && "$probe" =~ ${pending[kind]} ) \
+              || ( "$index_depth" != 0 && "$probe" =~ ${body_pending[kind]} ) ]]; then
+              match_kind="$kind"
+              break
+            fi
+          done
+        fi
+        quote_pattern="$double_body"
+        quote_prefix_pattern="$double_prefix"
+        if [ "$event" == "'" ]; then
+          quote_pattern="$single_body"
+          quote_prefix_pattern="$single_prefix"
+        fi
+        if [ "$match_kind" -eq -1 ]; then
+          printf '%s%s\n' "$event" "${line:cursor}"
+          return
+        fi
+        printf '%s' "$event"
+        quote_escape=0
+        quote_closed=0
+        while [ "$cursor" -lt "$line_length" ]; do
+          if [ "$cursor" -ge "$((window_base + ${#window}))" ]; then
+            next_base=$(((cursor / 4096) * 4096))
+            if [ "$next_base" -eq "$peek_base" ]; then
+              window="$peek_window"
+            else
+              window="${line:next_base:4096}"
+            fi
+            window_base="$next_base"
+          fi
+          view="${window:$((cursor - window_base))}"
+          if [ "$quote_escape" -eq 1 ]; then
+            printf '%s' "${view:0:1}"
+            cursor=$((cursor + 1))
+            quote_escape=0
+            continue
+          fi
+          if [[ "$view" =~ $quote_pattern ]]; then
+            opaque="${BASH_REMATCH[1]}"
+            printf '%s' "$opaque"
+            cursor=$((cursor + ${#opaque}))
+            quote_closed=1
+            break
+          fi
+          # Complete escape pairs stay in this view; only one final backslash can carry.
+          if [[ ! "$view" =~ $quote_prefix_pattern ]]; then
+            printf '%s\n' "${line:cursor}"
+            return
+          fi
+          opaque="${BASH_REMATCH[1]}"
+          printf '%s' "$opaque"
+          cursor=$((cursor + ${#opaque}))
+          if [ "${#opaque}" -lt "${#view}" ]; then
+            if [[ "${view:${#opaque}}" != '\' ]]; then
+              printf '%s\n' "${line:cursor}"
+              return
+            fi
+            printf '%s' '\'
+            cursor=$((cursor + 1))
+            quote_escape=1
+          fi
+        done
+        if [ "$quote_closed" -eq 0 ]; then
+          printf '\n'
+          return
+        fi
+        context="${normalized[match_kind]}"
+        last_receiver=0
+        if [[ "$index_depth" == 0 && "$probe" =~ ^${blank}${for_prefix} ]]; then
+          loop_frame=1
+        fi
+        ;;
+      ';')
+        # This includes a semicolon before the first bracket. Only a completed source statement
+        # restarts permission; unknown indices, open groups and prose cannot manufacture proof.
+        if [[ "$index_depth" != 0 || "$loop_frame" != 0 ]] \
+          || [[ ! "$probe" =~ $fast_complete && ! "$probe" =~ ${complete[0]} ]]; then
+          printf ';%s\n' "${line:cursor}"
+          return
+        fi
+        printf '%s' ';'
+        context=''
+        last_receiver=0
+        ;;
+      ':')
+        # Ordinary index slices admit at most three optional expression fields. This syntax is
+        # not a recovery delimiter outside a proven index, nor inside an unfinished expression.
+        if [[ "$index_depth" == 0 || "${index_fields[index_depth]:-0}" -ge 2 ]] \
+          || [[ ! "$probe" =~ ^${blank}$ && ! "$probe" =~ $fast_body_complete && ! "$probe" =~ ${body_complete[0]} ]]; then
+          printf ':%s\n' "${line:cursor}"
+          return
+        fi
+        printf '%s' ':'
+        if [[ "${index_fields[index_depth]}" == 0 && "$probe" =~ ^${blank}$ ]]; then
+          index_omitted[index_depth]=1
+        elif [[ "${index_fields[index_depth]}" == 1 && "${index_omitted[index_depth]}" == 1 \
+          && "$probe" =~ ^${blank}$ ]]; then
+          index_omitted[index_depth]=2
+        else
+          index_omitted[index_depth]=0
+        fi
+        index_fields[index_depth]=$((index_fields[index_depth] + 1))
+        context=''
+        last_receiver=0
+        ;;
+      ']')
+        # A leading omitted-bound form that failed the unchanged step grammar cannot borrow
+        # the more general explicit-field expression grammar to complete a later statement.
+        if [[ "$index_depth" == 0 ]] \
+          || [[ "${index_omitted[index_depth]:-0}" == 2 ]] \
+          || [[ ! "$probe" =~ $fast_body_complete && ! "$probe" =~ ${body_complete[0]} \
+            && ! ( "${index_fields[index_depth]:-0}" -gt 0 && "$probe" =~ ^${blank}$ ) ]]; then
+          printf ']%s\n' "${line:cursor}"
+          return
+        fi
+        # Literal brackets were emitted by the quote event, so this is the real index close.
+        printf '%s' ']'
+        index_depth=$((index_depth - 1))
+        context="${parent_context[index_depth]}"
+        loop_frame="${parent_loop[index_depth]}"
+        last_receiver=1
+        ;;
+      '[')
+        if [[ "$index_depth" -ge 2 ]] \
+          || [[ "$prefix" =~ ^${blank}$ && "$last_receiver" == 0 ]]; then
+          printf '[%s\n' "${line:cursor}"
+          return
+        fi
+        # Only an already proven receiver admits a bracket chain without a new raw root.
+        # Preserve its saved frame; the numeric surrogate cannot invent calls or attributes.
+        if [[ "$prefix" =~ ^${blank}$ && "$last_receiver" == 1 ]]; then
+          norm="$context"
+        else
+          match_kind=-1
+          if [[ ( "$index_depth" == 0 && "$probe" =~ $fast_receiver ) \
+            || ( "$index_depth" != 0 && "$probe" =~ $fast_body_receiver ) ]]; then
+            match_kind=0
+          else
+            for kind in 0 1 2; do
+              if [[ ( "$index_depth" == 0 && "$probe" =~ ${receiver[kind]} ) \
+                || ( "$index_depth" != 0 && "$probe" =~ ${body_receiver[kind]} ) ]]; then
+                match_kind="$kind"
+                break
+              fi
+            done
+          fi
+          if [ "$match_kind" -eq -1 ]; then
+            printf '[%s\n' "${line:cursor}"
+            return
+          fi
+          norm="${normalized[match_kind]}"
+        fi
+        if [[ "$index_depth" == 0 && "$probe" =~ ^${blank}${for_prefix} ]]; then
+          loop_frame=1
+        fi
+        # Peek from the existing cache without moving or emitting the ordinary-index input.
+        peek_cursor="$cursor"
+        peek_base="$window_base"
+        peek_window="$window"
+        inside_parts=()
+        close_cursor=-1
+        while [ "$peek_cursor" -lt "$line_length" ]; do
+          if [ "$peek_cursor" -ge "$((peek_base + ${#peek_window}))" ]; then
+            peek_base=$(((peek_cursor / 4096) * 4096))
+            peek_window="${line:peek_base:4096}"
+          fi
+          peek_view="${peek_window:$((peek_cursor - peek_base))}"
+          if [[ "$peek_view" == *']'* ]]; then
+            peek_prefix="${peek_view%%]*}"
+            close_cursor=$((peek_cursor + ${#peek_prefix}))
+            if [ "${#inside_parts[@]}" -eq 0 ]; then
+              inside="$peek_prefix"
+            else
+              inside_parts+=("$peek_prefix")
+              printf -v inside '%s' "${inside_parts[@]}"
+            fi
+            break
+          fi
+          inside_parts+=("$peek_view")
+          peek_cursor=$((peek_cursor + ${#peek_view}))
+        done
+        if [ "$close_cursor" -eq -1 ]; then
+          printf '[%s\n' "${line:cursor}"
+          return
+        fi
+        if [[ "$inside" =~ $slice ]]; then
+          step="${BASH_REMATCH[1]}"
+          # Preserve the original whitelist, nonblank predicate and balanced depth-two grammar.
+          if [[ "$step" =~ $step_chars && "$step" =~ [^[:blank:]] && "$step" =~ $balanced ]]; then
+            printf '%s' '[<python-slice>]'
+            cursor=$((close_cursor + 1))
+            window_base="$peek_base"
+            window="$peek_window"
+            context="$norm"
+            last_receiver=1
+            continue
+          fi
+        fi
+        # Validate an ordinary/nested body through opaque events and a bounded index frame.
+        # A malformed outer can still expose a source-qualified inner before its own close.
+        printf '%s' '['
+        parent_context[index_depth]="$norm"
+        parent_loop[index_depth]="$loop_frame"
+        index_depth=$((index_depth + 1))
+        index_fields[index_depth]=0
+        index_omitted[index_depth]=0
+        context=''
+        last_receiver=0
+        loop_frame=0
+        ;;
+    esac
   done
-  printf '%s\n' "$rest"
+  printf '\n'
 }
 
 scan_leading_ipv6() {

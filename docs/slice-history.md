@@ -6,6 +6,46 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Slice masking preserves literal address text (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The helper recognizes bounded source expressions from the original selected physical-line start.
+Quoted literals, backticks, comments and Markdown bullets retain their address text. A new frame
+after a semicolon requires a completed supported statement, and chained indexes require a
+recognized body. Quoted index keys retain literal brackets while permitting genuine later slices.
+Separated numeric atoms preserve token boundaries without inventing callable receivers.
+
+The helper reads fixed 4096-byte windows with absolute byte cursors. Source prefixes and slice
+bodies spanning windows are joined once; quotes stream with explicit escape carry. Lookahead
+keeps ordinary-index input intact unless a complete step qualifies for the existing mask.
+The expression predicates, step grammar and all scanner bytes outside this helper remain
+unchanged by the transport correction. No production dependency or file exemption was added.
+
+The initial literal-context regression recorded **1112 passing assertions and 207 intended
+failures** against the unchanged published guard. Independent fixture review confirmed all 118
+existing runtime inputs unchanged, including the original 17 slice controls and their neighbors.
+The later backtick control intentionally changes to rejection. Three reviewed progress framing
+amendments retain the original workload sizes and deadlines. Additional focused regressions
+cover normalized atom boundaries; nine byte-coordinate cases cover window boundaries, UTF-8,
+escapes, quoted keys, source transitions, unsupported triples and EOF.
+
+The final scanner passed **1437 assertions** in **39.451 seconds**. All nine progress workloads
+passed within unchanged five-second limits (0.150–3.754 seconds). This includes 2048 escaped
+literal/slice groups in 3.754 seconds and the complete two-pass all-slices case in 2.604 seconds.
+The quoted-key helper output matched all **8230 expected bytes**, preserving UTF-8 and exactly
+one final newline. The exact archived 65,562-byte call-root probe retained its endpoint and masked
+its genuine slice in **0.310 seconds**. All eight selected locks passed; the complete tracked tree
+scanned clean in **11.910 seconds**, below the fixed 30-second bound. Source identities remained
+unchanged. A final whitespace check identified one extra newline in the new plan amendment;
+removing it changes no historical text or scanner/test bytes.
+
+Independent plan, test and implementation reviews approved the correction. Final documentation
+guards and complete evidence review remain required before publication, followed by fresh
+current-head CI. The original controlled 4.45-fold comparison remains historical for its recorded
+source pair. The helper receives selected physical lines independently: it cannot infer strings
+or fences opened on earlier lines, and prose spelling a supported source expression is ambiguous.
+Native Git Bash and ShellCheck remain unverified. R61 continues to require human review.
+
 ## Slice masking requires a framed source receiver (2026-10-11)
 
 Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).

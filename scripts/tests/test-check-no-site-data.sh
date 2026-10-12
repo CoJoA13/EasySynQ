@@ -66,7 +66,8 @@ run_gate() {
 run_progress_case() {
   local name="$1" progress_repo="$TEST_ROOT/progress-$1"
   local padding='' payload='' repeated='' unicode='' fragment='' iteration
-  local first second numeric mapped malformed_mapped long_step want=1
+  local first second numeric mapped malformed_mapped long_step slice_prefix want=1
+  slice_prefix="$(printf '%s%s' ':' ':')"
   first="$(printf '%s%s' '::' 'abcd')"
   second="$(printf '%s%s' '::' 'def0')"
   numeric="$(printf '%s%s' '::' '2')"
@@ -77,21 +78,21 @@ run_progress_case() {
   case "$name" in
     small-control)
       printf -v padding '%1024s' ''
-      payload="$(printf '%s%s' "$padding" "values[::f()]; endpoint='$first'.")"
+      payload="$(printf '%s%s' "$padding" "values[${slice_prefix}f()]; endpoint='$first'.")"
       ;;
     long-no-bracket)
       payload="${padding}endpoint='$first'"
       ;;
     long-sparse)
-      payload="$first. ; values[::f()]${padding}[$numeric] $second. "
+      payload="endpoint='$first. '; values[${slice_prefix}f()]${padding}[$numeric]; endpoint='$second. '"
       ;;
     unicode-sparse)
       unicode='λ'
       for ((iteration=0; iteration<15; iteration++)); do unicode+="$unicode"; done
-      payload="$first. ; values[::f()] ${unicode}; values[::2 + 1] $second. "
+      payload="endpoint='$first. '; values[${slice_prefix}f()]; text='${unicode}'; values[${slice_prefix}2 + 1]; endpoint='$second. '"
       ;;
     all-slices)
-      repeated='values[0][::2][::f()] [::(2 + 1)] + f()[::2]; '
+      repeated="values[0][${slice_prefix}2][${slice_prefix}f()] [${slice_prefix}(2 + 1)] + f()[${slice_prefix}2]; "
       # Four recognized spans per group, doubled to 512 groups: exactly 2,048 slice spans.
       for ((iteration=0; iteration<9; iteration++)); do repeated+="$repeated"; done
       payload="$repeated"
@@ -107,7 +108,27 @@ run_progress_case() {
       for ((iteration=0; iteration<9; iteration++)); do repeated+="$repeated"; done
       repeated="${repeated#"$fragment"}"
       repeated="${repeated%"$fragment"}"
-      payload="values[$first + (((1)))]; $repeated outer[bad + inner[::f()]]; values[$second + (1]"
+      payload="$(printf '%s\n%s' "values[$first + (((1)))]; ${repeated}values[$second + (1]" \
+        "outer[bad + inner[${slice_prefix}f()]];")"
+      assert_exit 'progress malformed-dense retains 510 identical middle fragments' \
+        "$((${#fragment} * 510))" "${#repeated}"
+      assert_exit 'progress malformed-dense retains 512 malformed fragments' \
+        512 "$(printf '%s' "$payload" | grep -Fo -- 'values[' | wc -l | tr -d '[:blank:]')"
+      assert_exit 'progress malformed-dense retains its fresh source line' \
+        2 "$(printf '%s\n' "$payload" | wc -l | tr -d '[:blank:]')"
+      ;;
+    literal-dense)
+      fragment='note = "escaped \"quote\" and \\slash [key] # = ;"; '
+      fragment+="values[$numeric]; "
+      repeated="$fragment"
+      for ((iteration=0; iteration<11; iteration++)); do repeated+="$repeated"; done
+      payload="note = \"server[$first]\"; ${repeated}note = \"server[$second]"
+      assert_exit 'progress literal-dense retains 2048 complete literal/slice groups' \
+        "$((${#fragment} * 2048))" "${#repeated}"
+      assert_exit 'progress literal-dense retains 2048 complete escaped literals' \
+        2048 "$(printf '%s' "$repeated" | grep -Fo -- 'note = "escaped' | wc -l | tr -d '[:blank:]')"
+      assert_exit 'progress literal-dense retains 2048 numeric slices' \
+        2048 "$(printf '%s' "$repeated" | grep -Fo -- "[$numeric]" | wc -l | tr -d '[:blank:]')"
       ;;
     malformed-long-step)
       long_step="${padding// /x}"
@@ -142,13 +163,13 @@ run_progress_case() {
       *) assert_contains "progress $name preserves its first address" "$RUN_OUTPUT" "probe.txt:1:$first" ;;
     esac
     case "$name" in
-      long-sparse|unicode-sparse|malformed-dense|malformed-long-step)
+      long-sparse|unicode-sparse|malformed-dense|malformed-long-step|literal-dense)
         assert_contains "progress $name preserves its last address" "$RUN_OUTPUT" "probe.txt:1:$second"
         ;;
     esac
   fi
   case "$name" in
-    small-control|long-sparse|unicode-sparse|all-slices)
+    small-control|long-sparse|unicode-sparse|all-slices|literal-dense)
       assert_not_contains "progress $name has no numeric-slice diagnostic" "$RUN_OUTPUT" "probe.txt:1:$numeric"
       ;;
   esac
@@ -165,7 +186,7 @@ run_progress_case() {
   if [ "$name" = malformed-dense ]; then
     local inner_candidate
     inner_candidate="$(printf '%s%s' '::' 'f')"
-    assert_not_contains 'progress rejected outer span still permits its inner slice' "$RUN_OUTPUT" "probe.txt:1:$inner_candidate"
+    assert_not_contains 'progress fresh source line permits its inner slice' "$RUN_OUTPUT" "$inner_candidate"
   fi
 }
 
@@ -305,6 +326,7 @@ ipv4_rule="IPv4 address outside"
 fingerprint_rule="Certificate/key fingerprint"
 leading_hex="$(printf '%s%s' '::' 'abcd')"
 leading_numeric="$(printf '%s%s' '::' '2')"
+slice_prefix="$(printf '%s%s' ':' ':')"
 mapped_hex="$(printf '%s%s:%s:%s' '::' 'ffff' 'c0a8' '0101')"
 unsafe_ipv4="$(printf '%s.%s.0.5' '172' '16')"
 mapped_doc="$(printf '%s%s:%s.%s.%s.%s' '::' 'ffff' '192' '0' '2' '1')"
@@ -331,12 +353,12 @@ done
 
 # The bounded mask covers arithmetic/calls, receivers, and multiple spans without needing Python.
 slice_cases=(
-  'values[::2]' 'values[::+2]' 'values[::-2]' 'values [ :: 2 ]'
-  'values[::abcd]' 'values[::2 + 1]' 'values[::f()]'
-  'values[::(2 + 1)]' 'values[::f(2 + 1)]' 'values[::f((2 + 1))]'
-  'values[::pkg.f(2, 1)]' 'values[::2 * 3 / 1 % 2]'
-  'f()[::2]' 'values[0][::2]' 'object.values[::2]'
-  'values[::2] + other[::f()]' 'values[0:5:2]'
+  "values[${slice_prefix}2]" "values[${slice_prefix}+2]" "values[${slice_prefix}-2]" "values [ ${slice_prefix} 2 ]"
+  "values[${slice_prefix}abcd]" "values[${slice_prefix}2 + 1]" "values[${slice_prefix}f()]"
+  "values[${slice_prefix}(2 + 1)]" "values[${slice_prefix}f(2 + 1)]" "values[${slice_prefix}f((2 + 1))]"
+  "values[${slice_prefix}pkg.f(2, 1)]" "values[${slice_prefix}2 * 3 / 1 % 2]"
+  "f()[${slice_prefix}2]" "values[0][${slice_prefix}2]" "object.values[${slice_prefix}2]"
+  "values[${slice_prefix}2] + other[${slice_prefix}f()]" 'values[0:5:2]'
 )
 case_number=0
 for slice in "${slice_cases[@]}"; do
@@ -420,7 +442,7 @@ framed_slice_cases=(
   "result = object.values [$leading_hex]"
   "result = values[\"key\"] [$leading_hex]"
   "values[0][$leading_numeric] [$leading_hex][$leading_numeric]"
-  'outer[bad + inner[::f()]]'
+  "outer[bad + inner[${slice_prefix}f()]]"
   "$(printf '`values[%s]`' "$leading_hex")"
 )
 case_number=0
@@ -429,10 +451,269 @@ for slice in "${framed_slice_cases[@]}"; do
   label="framed-slice-control-$case_number"
   new_text_case "$label" "$slice"
   run_gate "$repo" "$PATH"
+  if [ "$case_number" -eq 14 ]; then
+    expect_rejection "$label" "$ipv6_rule"
+    assert_contains "$label retains its literal address" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
+  else
+    expect_clean "$label"
+  fi
+done
+
+# Literal contents and invalid prose cannot acquire source permission through punctuation.
+literal_context_cases=(
+  "message = \"server[$leading_hex]\""
+  "message = 'server[$leading_hex]'"
+  "message = \"value = server[$leading_hex]\""
+  "\"server[$leading_hex]\""
+  'message = "escaped \"quote\"; path \\host; server['"$leading_hex"']"'
+  "message = \"server[$leading_hex]"
+  "message = 'server[$leading_hex]"
+  "message = \"\"\"server[$leading_hex]\"\"\""
+  "message = '''server[$leading_hex]'''"
+  'message = `value = server['"$leading_hex"']`'
+  "- server[$leading_hex]"
+  "+ server[$leading_hex]"
+  "* server[$leading_hex]"
+  "1. server[$leading_hex]"
+  "# value = server[$leading_hex]"
+  "result = 1; # value = server[$leading_hex]"
+  "message = \"server()[$leading_hex]\""
+  "message = \"server[0][$leading_hex]\""
+  "- server()[$leading_hex]"
+  "- server[0][$leading_hex]"
+  "message = \"(server + other)[$leading_hex]\""
+  "DNS prose; server[$leading_hex]"
+  "DNS prose = server[$leading_hex]"
+  "DNS prose + server[$leading_hex]"
+  "DNS prose (server[$leading_hex])"
+  "DNS prose, server[$leading_hex]"
+  "DNS prose [server[$leading_hex]]"
+  "DNS prose; result = values[$leading_hex]"
+  "values[0 ???]; server[$leading_hex]"
+  "values[(0]; server[$leading_hex]"
+  "values[0:1:2:3]; server[$leading_hex]"
+  'message = "escaped \"; result = server['"$leading_hex"']'
+  "message = \"server[$leading_hex]"'\'
+  "note = \"safe\"server[$leading_hex]"
+  "values[0]server[$leading_hex]"
+  "f(\"safe\"server[$leading_hex])"
+  "f(values[0]server[$leading_hex])"
+  "\"safe\"()[$leading_hex]"
+  "f(\"safe\"()[$leading_hex])"
+  "values[0]()[$leading_hex]"
+  "f(values[0]()[$leading_hex])"
+)
+case_number=0
+for content in "${literal_context_cases[@]}"; do
+  case_number=$((case_number + 1))
+  label="literal-context-$case_number"
+  new_text_case "$label" "$content"
+  run_gate "$repo" "$PATH"
+  expect_rejection "$label" "$ipv6_rule"
+  assert_contains "$label retains the complete address" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
+done
+
+# One surviving address cannot conceal masking of the other, including unknown-index recovery.
+literal_dual_cases=(
+  "message = \"server[$leading_hex]; value = server[$prose_second]\""
+  "message = \"server[$leading_hex]\"; result = values[$leading_numeric]; other = \"server[$prose_second]\""
+  "values[$leading_hex + (((1)))]; server[$prose_second]"
+  "\"server[$leading_hex]\" + \"value = server[$prose_second]\""
+  'message = `server['"$leading_hex"']`; server['"$prose_second"']'
+)
+case_number=0
+for content in "${literal_dual_cases[@]}"; do
+  case_number=$((case_number + 1))
+  label="literal-dual-$case_number"
+  new_text_case "$label" "$content"
+  run_gate "$repo" "$PATH"
+  expect_rejection "$label" "$ipv6_rule"
+  assert_contains "$label retains the first complete token" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
+  assert_contains "$label retains the second complete token" "$RUN_OUTPUT" "probe.txt:1:$prose_second"
+  if [ "$case_number" -eq 2 ]; then
+    assert_not_contains "$label still masks its real source slice" "$RUN_OUTPUT" "probe.txt:1:$leading_numeric"
+  fi
+done
+
+# Opaque address content remains visible while actual source slices keep their provenance.
+literal_source_neighbors=(
+  "result = values[$leading_numeric]; message = \"server[$leading_hex]\""
+  "message = \"server[$leading_hex]\"; result = values[$leading_numeric]"
+  "result = values[\"server[$leading_hex]\"][$leading_numeric]"
+  "result = values[$leading_numeric]; # server[$leading_hex]"
+  "result = values[$leading_numeric]; note = 'server[$leading_hex]'"
+  "note = 'server[$leading_hex]'; values[$leading_numeric]"
+)
+case_number=0
+for content in "${literal_source_neighbors[@]}"; do
+  case_number=$((case_number + 1))
+  label="literal-source-neighbor-$case_number"
+  new_text_case "$label" "$content"
+  run_gate "$repo" "$PATH"
+  expect_rejection "$label" "$ipv6_rule"
+  assert_contains "$label preserves its literal address" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
+  assert_not_contains "$label masks its genuine slice" "$RUN_OUTPUT" "probe.txt:1:$leading_numeric"
+done
+new_text_case "nested-inner-source-neighbor" \
+  "outer[bad + inner[${slice_prefix}f()]]; endpoint='$leading_hex'"
+run_gate "$repo" "$PATH"
+expect_rejection "nested-inner-source-neighbor" "$ipv6_rule"
+assert_contains 'nested inner preserves the same-line neighbor' "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
+assert_not_contains 'nested inner remains a genuine source slice' "$RUN_OUTPUT" \
+  "probe.txt:1:$(printf '%s%s' ':' ':f')"
+
+# Measured executable frames and benign opaque atoms remain supported within fixed depth.
+literal_frame_positives=(
+  "ordering = tuple(reversed(values[$leading_numeric] + values[1:][$leading_numeric]))"
+  "reversed_case = dataclasses.replace(case, observations=values[$leading_numeric])"
+  "for ordering in (values, values[$leading_numeric]):"
+  "for observations in (case.observations[$leading_numeric], case.observations[1:] + case.observations[:1]):"
+  "note = 'key'; result = values[$leading_numeric]"
+  'note = "escaped \"quote\" and \\slash [key] # = ;"; values['"$leading_numeric"']'
+  "result = values['key'][$leading_numeric]"
+  "result = values[1:][$leading_numeric]"
+  "result = values[0:5:2][$leading_numeric]"
+  "result = consume(values[$leading_numeric], 1)"
+  "values[(0 + 1)][$leading_numeric]"
+  "values[0 * (1 + 2)][$leading_numeric]"
+)
+case_number=0
+for content in "${literal_frame_positives[@]}"; do
+  case_number=$((case_number + 1))
+  label="literal-frame-positive-$case_number"
+  new_text_case "$label" "$content"
+  run_gate "$repo" "$PATH"
   expect_clean "$label"
 done
 
-new_text_case "slice-uri-neighbor" "values[::f()]; endpoint=http://[$leading_hex]:443"
+# Fixed physical-line byte coordinates characterize refill boundaries without changing grammar.
+run_window_boundary_cases() {
+  local LC_ALL=C
+  local case_name prefix padding payload want_length want_second want_mask want_numeric
+  for case_name in window-key-utf8 window-odd-escape window-even-escape \
+    window-triple-double window-triple-single window-source-frames window-slice-close \
+    window-escape-eof window-invalid-prefix; do
+    want_second=0
+    want_mask=0
+    want_numeric=0
+    case "$case_name" in
+      window-key-utf8)
+        prefix='values["'
+        printf -v padding '%*s' "$((4095 - ${#prefix}))" ''
+        payload="${padding}${prefix}λ"
+        printf -v padding '%*s' "$((8178 - ${#payload}))" ''
+        payload+="${padding}server[$leading_hex]\"][$leading_numeric]; endpoint=\"$prose_second\""
+        want_length=8218
+        want_second=1
+        want_mask=1
+        assert_exit "$case_name quote and UTF-8 bytes cross the first boundary" \
+          '"λ' "${payload:4094:3}"
+        assert_exit "$case_name literal and real closes precede the genuine slice" \
+          "]\"][$leading_numeric]" "${payload:8191:8}"
+        ;;
+      window-odd-escape)
+        prefix='note = "x'
+        printf -v padding '%*s' "$((4095 - ${#prefix}))" ''
+        payload="${padding}${prefix}"'\'
+        payload+="\"; value = server[$leading_hex]\"; values[$leading_numeric]; endpoint=$prose_second"
+        want_length=4152
+        want_second=1
+        want_mask=1
+        assert_exit "$case_name escape crosses the boundary before a literal semicolon" \
+          '\";' "${payload:4095:3}"
+        ;;
+      window-even-escape)
+        prefix="note = 'x"
+        printf -v padding '%*s' "$((4095 - ${#prefix}))" ''
+        payload="${padding}${prefix}"'\\'
+        payload+="'; values[$leading_numeric]; endpoint=\"server[$leading_hex]\""
+        want_length=4138
+        want_mask=1
+        assert_exit "$case_name paired escape crosses the boundary before the real close" \
+          "\\\\'" "${payload:4095:3}"
+        ;;
+      window-triple-double)
+        prefix='note = '
+        printf -v padding '%*s' "$((4095 - ${#prefix}))" ''
+        payload="${padding}${prefix}\"\"\"value = server[$leading_hex]\"\"\"; values[$leading_numeric]"
+        want_length=4136
+        want_numeric=1
+        assert_exit "$case_name opener spans the boundary with a one-plus-two split" \
+          '"""' "${payload:4095:3}"
+        ;;
+      window-triple-single)
+        prefix='note = '
+        printf -v padding '%*s' "$((4094 - ${#prefix}))" ''
+        payload="${padding}${prefix}'''value = server[$leading_hex]'''; values[$leading_numeric]"
+        want_length=4135
+        want_numeric=1
+        assert_exit "$case_name opener spans the boundary with a two-plus-one split" \
+          "'''" "${payload:4094:3}"
+        ;;
+      window-source-frames)
+        payload='result = 1'
+        printf -v padding '%*s' "$((4095 - ${#payload}))" ''
+        payload+="${padding};consume("
+        printf -v padding '%*s' "$((8189 - ${#payload}))" ''
+        payload+="${padding}values[$leading_numeric]"
+        printf -v padding '%*s' "$((12287 - ${#payload}))" ''
+        payload+="${padding}, values[0"
+        printf -v padding '%*s' "$((16383 - ${#payload}))" ''
+        payload+="${padding}][$leading_numeric]); endpoint=$leading_hex"
+        want_length=16407
+        want_mask=1
+        assert_exit "$case_name completed statement ends at the first boundary" ';' "${payload:4095:1}"
+        assert_exit "$case_name source root crosses the second boundary" 'values' "${payload:8189:6}"
+        assert_exit "$case_name argument comma ends at the third boundary" ',' "${payload:12287:1}"
+        assert_exit "$case_name proven index close and chained slice cross the fourth boundary" \
+          "][$leading_numeric]" "${payload:16383:6}"
+        ;;
+      window-slice-close)
+        prefix='values'
+        printf -v padding '%*s' "$((4095 - ${#prefix}))" ''
+        payload="${padding}${prefix}[$leading_numeric"
+        printf -v padding '%4093s' ''
+        payload+="${padding}]; endpoint=$leading_hex"
+        want_length=8210
+        want_mask=1
+        assert_exit "$case_name opener and step cross the first boundary" \
+          "[$leading_numeric" "${payload:4095:4}"
+        assert_exit "$case_name accepted close begins the third window" ']' "${payload:8192:1}"
+        ;;
+      window-escape-eof)
+        printf -v padding '%4073s' ''
+        payload="note = \"${padding}server[$leading_hex]"'\'
+        want_length=4096
+        assert_exit "$case_name unmatched escape is the last physical-line byte" '\' "${payload:4095:1}"
+        ;;
+      window-invalid-prefix)
+        payload='DNS prose '
+        printf -v padding '%*s' "$((4096 - ${#payload}))" ''
+        payload+="${padding}server[$leading_hex]"
+        want_length=4110
+        assert_exit "$case_name retains the original invalid prefix" 'DNS prose ' "${payload:0:10}"
+        assert_exit "$case_name apparent receiver starts at the next window" 'server[' "${payload:4096:7}"
+        ;;
+    esac
+    assert_exit "$case_name has its reviewed physical-line byte length" "$want_length" "${#payload}"
+    new_text_case "$case_name" "$payload"
+    run_gate "$repo" "$PATH"
+    expect_rejection "$case_name" "$ipv6_rule"
+    assert_contains "$case_name retains its complete address" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
+    if [ "$want_second" -eq 1 ]; then
+      assert_contains "$case_name retains its complete neighbor" "$RUN_OUTPUT" "probe.txt:1:$prose_second"
+    fi
+    if [ "$want_mask" -eq 1 ]; then
+      assert_not_contains "$case_name masks its genuine source slices" "$RUN_OUTPUT" "probe.txt:1:$leading_numeric"
+    fi
+    if [ "$want_numeric" -eq 1 ]; then
+      assert_contains "$case_name retains its unsupported apparent slice" "$RUN_OUTPUT" "probe.txt:1:$leading_numeric"
+    fi
+  done
+}
+run_window_boundary_cases
+
+new_text_case "slice-uri-neighbor" "values[${slice_prefix}f()]; endpoint=http://[$leading_hex]:443"
 run_gate "$repo" "$PATH"
 expect_rejection "slice-uri-neighbor" "$ipv6_rule"
 
@@ -479,7 +760,7 @@ expect_rejection "existing-full-ipv6" "$ipv6_rule"
 # One terminal prose period is punctuation; internal/repeated dots remain part of the candidate.
 case_number=0
 for suffix in '.' '. ' $'.\t'; do
-  for prefix in '' 'values[::2 + 1]; ' 'values[::f()]; '; do
+  for prefix in '' "values[${slice_prefix}2 + 1]; " "values[${slice_prefix}f()]; "; do
     case_number=$((case_number + 1))
     label="leading-sentence-period-$case_number"
     new_text_case "$label" "${prefix}${leading_hex}${suffix}"
@@ -489,7 +770,7 @@ for suffix in '.' '. ' $'.\t'; do
     assert_not_contains "$label omits the prose period" "$RUN_OUTPUT" "probe.txt:1:${leading_hex}."
   done
 done
-new_text_case "sentence-two-neighbors" "values[::f((2 + 1))]; $leading_hex. $mapped_hex."
+new_text_case "sentence-two-neighbors" "values[${slice_prefix}f((2 + 1))]; $leading_hex. $mapped_hex."
 run_gate "$repo" "$PATH"
 expect_rejection "sentence-two-neighbors" "$ipv6_rule"
 assert_contains "sentence first neighbor survives" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
@@ -521,7 +802,7 @@ for suffix in '' '.' '. '; do
   expect_rejection "$label" "$ipv4_rule"
   assert_not_contains "$label has no partial hex match" "$RUN_OUTPUT" "$ipv6_rule"
 done
-new_text_case "mapped-slice-and-neighbor" "values[::f()]; $mapped_doc. $mapped_unsafe."
+new_text_case "mapped-slice-and-neighbor" "values[${slice_prefix}f()]; $mapped_doc. $mapped_unsafe."
 run_gate "$repo" "$PATH"
 expect_rejection "mapped-slice-and-neighbor" "$ipv4_rule"
 assert_contains "mapped unsafe endpoint survives" "$RUN_OUTPUT" "probe.txt:1:$unsafe_ipv4"
@@ -542,7 +823,7 @@ for content in "${malformed_dotted_cases[@]}"; do
 done
 
 # Exercise the new scanner branches with exactly the shell-only PATH used by the existing control.
-new_text_case "leading-shell-only" "values[::f()]; $leading_hex."
+new_text_case "leading-shell-only" "values[${slice_prefix}f()]; $leading_hex."
 run_gate "$repo" "$fake_bin"
 expect_rejection "leading-shell-only" "$ipv6_rule"
 
