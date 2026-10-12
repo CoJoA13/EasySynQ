@@ -831,23 +831,6 @@ against the current output. `formatTimestamp`'s missing `timeZone` should be fix
 proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02
 
-## RES-SITE-DATA-GUARD-GAPS
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #421](https://github.com/CoJoA13/EasySynQ/issues/421), a deferred review batch
-from 2026-08-03; verified against `3d8613a` on 2026-09-22.
-Reason: `scripts/check-no-site-data.sh` (the R61 mechanical backstop) still misses four shapes: IPv6
-addresses that begin with `::` compression (deliberately unmatched because Python slice syntax such
-as `a[::2]` has the same shape), textual lockfiles (skipped by the `\.lock$` exclusion), lowercase
-MD5 fingerprints (the pattern is uppercase-only), and file names beginning with `-` (most matchers
-pass the file list without a `--` separator).
-Closure contract: Close all four with a context-aware rule for leading `::` that keeps the slice
-false positive out, an evidence-backed lockfile policy, a case-insensitive fingerprint match, and
-`--` on every matcher. Prove each with a failing fixture in `scripts/tests/test-check-no-site-data.sh`
-and a clean run over the full tree.
-Last reviewed: 2026-09-22
-
 ## RES-SITE-ARTIFACT-GITIGNORE
 
 Status: OPEN
@@ -864,25 +847,6 @@ runbooks (today they show an inline override fragment without prescribing a path
 can be targeted safely, and a wildcard broad enough to cover every valid Compose filename would hide
 tracked files). Then ignore exactly that path and the exported root CA, and prove both with
 `git check-ignore` plus a check that every tracked `infra/compose/compose.*.yml` stays tracked.
-Last reviewed: 2026-09-22
-
-## RES-CREDENTIAL-RESET-R64-ALIGNMENT
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #430](https://github.com/CoJoA13/EasySynQ/issues/430), deferred from PR #429 on
-2026-08-04; the contract text (item 3) has since been aligned. Verified against `3d8613a` on 2026-09-22.
-Reason: R64 rule 5 requires a system-tier caller to reset another user's credential. The roster still
-offers "Issue new temp password" to any caller holding `user.create` (`UsersAdmin.tsx`), so a
-granular-override holder sees an action that always returns `422 two_tier_violation`. The PEP check
-in `services/authz/pep.py` is unconditional (no self exception), while R64 rule 5, its denial
-message and doc 07 §351 say "another user"; doc 07 then justifies system tier for "every reset", and
-the published contract describes the guard as unconditional. The authorities disagree, and choosing
-the weaker reading would change a security boundary.
-Closure contract: Gate the roster action on the same system-tier rule the server enforces, with a
-component test for a granular `user.create` holder. Keep the unconditional guard and correct R64
-rule 5, the denial text and doc 07 to say every reset needs system tier; a self-reset exception is
-out of scope for this record and needs its own owner-approved register amendment first.
 Last reviewed: 2026-09-22
 
 ## RES-UNBOUND-SCOPE-TEMPLATE-ROLES

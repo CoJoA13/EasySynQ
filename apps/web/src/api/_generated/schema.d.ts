@@ -297,7 +297,7 @@ export interface paths {
         };
         /**
          * The caller's own effective permissions at a scope (DP-6 affordance gating; slice S-web-3).
-         * @description Authentication-only — it reports the caller's OWN grants, so it gates nothing (the GET /me precedent; deliberately not user.read-gated, which would stop an ordinary author from discovering their own affordances). A coarse SYSTEM-scope answer by default; the optional scope_level/scope_id refine it (e.g. document.create at a DOC_CLASS). Per-document write buttons gate on the document's capabilities block (GET /documents/{id}) instead.
+         * @description Authentication-only — it reports the caller's OWN grants, so it gates nothing (the GET /me precedent; deliberately not user.read-gated, which would stop an ordinary author from discovering their own affordances). A coarse SYSTEM-scope answer by default; the optional scope_level/scope_id refine it (e.g. document.create at a DOC_CLASS). Per-document write buttons gate on the document's capabilities block (GET /documents/{id}) instead. system_tier reports the caller's administrative tier using the same effective non-content-only permission.grant rule as the server guards, always at SYSTEM scope regardless of scope_level/scope_id.
          */
         get: operations["getMyPermissions"];
         put?: never;
@@ -4670,6 +4670,15 @@ export interface components {
             };
             permissions: components["schemas"]["EffectivePermissionEntry"][];
         };
+        MyEffectivePermissions: {
+            /** @description The scope the permissions were resolved at. */
+            scope: {
+                [key: string]: unknown;
+            };
+            permissions: components["schemas"]["EffectivePermissionEntry"][];
+            /** @description Whether the caller satisfies the server's effective non-content-only permission.grant tier rule at SYSTEM scope, including scope, predicates and deny precedence. Evaluated independently of the scope requested for permission keys; user.create alone does not confer this tier. */
+            system_tier: boolean;
+        };
         DistributionEntry: {
             /** Format: uuid */
             id: string;
@@ -8353,13 +8362,13 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The caller's effective permissions with provenance. */
+            /** @description The caller's effective permissions with provenance and administrative tier. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["EffectivePermissions"];
+                    "application/json": components["schemas"]["MyEffectivePermissions"];
                 };
             };
             /** @description Missing, invalid, or expired token. */

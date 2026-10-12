@@ -5,6 +5,314 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+
+## Identity recovery contracts verified with the accepted parallel changes (2026-10-12 UTC)
+
+Integration candidate for [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642), following
+merged #640 and #641. The resolved canonical contract retains the self-permissions system-tier
+field, separate administrator permissions response, missing-subject problem code and explicit
+identity-recovery responses. Canonical generation reproduced all five source/generated files
+from the independently reviewed combined candidate. The original provider implementation,
+regression tests, recovery manual and issue plan remain byte-identical to their reviewed branch.
+
+The history merge preserves every accepted main entry and the exact original #431 entry once.
+The residual ledger combines only the three approved closures and preserves unrelated records.
+Independent reviews approved the actual contract, content and generated-artifact integration.
+The accepted browser readiness correction and scanner/harness are inherited unchanged; their
+controlled regression, mutation and progress proofs remain historical evidence for identical
+inputs, rather than new measurements from this integration.
+
+Fresh final-source verification passed the contract check, **5 focused contract tests**, web lint,
+and a browser build followed by **95 Chromium cases**, including **19 legibility cases**.
+Every browser case had one passing result, zero retries, and no skipped, unexpected or flaky
+outcomes; the report contained no top-level errors. At a 1280px viewport and 20px root font,
+all twelve filtering/sorting snapshots retained the same five column boundaries, table origin
+and width; the complete label-inventory case also passed. The browser command completed in
+179.202 seconds. The post-build manifest records 160 files against the unchanged tested source.
+
+The integrated tracked-tree site-data scan passed in **13.386 seconds**; authority and both
+working/index whitespace guards passed. Before/after source identities were identical. The four
+existing OpenAPI composition warnings, generator FutureWarning and browser-runner localStorage
+ExperimentalWarning remain recorded. Browser evidence uses Chromium and synthetic fixtures;
+live-provider recovery, replacement sign-in and built-image acceptance are not claimed. Final
+documentation guards, independent complete final review, normal commit hooks and current-head
+CI remain required before publication or merge as applicable.
+
+## Scanner decisions and source lines are independent of filenames (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+Tracked filenames and grep locations now travel through NUL-delimited records. Colons, quotes,
+backslashes and embedded newlines cannot become source text or nonexistent display-name operands.
+The exact dash filename is passed as an equivalent file operand. Default scanner exclusion and
+explicit selection retain their existing behavior; raw paths remain package-cache keys.
+
+Existing allowance expressions now inspect matched source content before the diagnostic path is
+attached. A filename cannot grant an allowance or create a repository-owner identity hit. Owner
+metadata checks preserve their original expressions and emit only a physical location with the
+existing redacted marker. Newline-bearing paths are escaped into one diagnostic line. The existing
+reporter still splits whitespace in displayed filenames; this change does not promise exact public
+rendering of those path bytes. Address grammar, candidate advancement, slice masking, package
+qualification and binary behavior are preserved. No runtime executable or file exemption is added.
+
+The independently reviewed test-only regression recorded **153 passes and 262 intended failures**
+in 8.937 seconds against the unchanged scanner. The 47 fixture repositories make 94 gate calls
+and add 415 assertions, covering default and explicit selection, physical EOF and source lines,
+multiple records, every direct matcher, qualified locks, content-only allowances, redaction,
+constrained PATH, exact scanner selection and benign controls. Removing the new block restores
+all prior harness bytes and outcomes.
+
+The expanded harness passed **2159 assertions in 66.241 seconds**, including all 1744 earlier
+assertions and all 415 new assertions. All eight explicit locks passed. The complete tracked tree
+scanned clean in **14.407 seconds**, below the unchanged 30-second limit, including the deliberate
+per-record owner normalization cost. Separate scanner/harness syntax, authority and working/index
+whitespace checks passed with identical before/after source identities. Independent plan, test,
+classified regression and implementation reviews approved the change. Final documentation guards
+and complete final review remain required before publication, followed by current-head CI.
+
+Independent exact comparisons support reuse of the ten prior progress results, raw UTF-8 helper
+output and archived long-root proof for unchanged code paths and workloads. Those are historical
+measurements and do not establish the new owner cost; the full-tree duration above is fresh.
+Native Git Bash and ShellCheck remain unverified. The existing physical-line and bounded-source
+limitations still apply, and R61 continues to require human review.
+
+## Leading mixed addresses retain their complete IPv6 diagnostic (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The leading-address consumer now recognizes a complete mixed spelling with zero through five
+explicit hex groups and a four-octet decimal tail. New decimal octets use canonical values from
+zero through 255 without multidigit leading zeros. The complete IPv6 token is reported even when
+its IPv4 suffix is independently sanctioned or rejected. The exact mapped rule still delegates
+to IPv4 first, including its historical invalid-octet fixture; successful pure-hex handling precedes
+the generic fallback. Semantic aliases receive no new exemption. A dated original-plan amendment
+records the grammar and sources while preserving all previous plan bytes.
+
+Only adjacent consumer declarations and classification predicates changed. Candidate boundaries,
+original-length cursor advancement and complete-core terminal-period normalization are preserved.
+Malformed cores cannot become shortened leading matches. The separate legacy matcher retains its
+existing interior diagnostics for some malformed multiple-compression text. Slice masking,
+package qualification and every other scanner rule are unchanged.
+
+The reviewed test-only regression recorded **103 passes and 101 intended failures** in 6.723 seconds
+against the unchanged scanner. All preservation controls passed. The new 57-fixture cohort adds
+204 assertions with complete line-ending-bounded diagnostics, canonical octet edges, aliases,
+malformed forms, mapped ownership, genuine slices and independent neighboring addresses. Removing
+only that cohort restores every prior harness byte; no existing expectation changed.
+
+The final expanded harness passed **1744 assertions in 43.230 seconds**. All eight explicit locks
+passed, and the complete tracked tree scanned clean in **11.447 seconds**, below the unchanged
+30-second limit. Separate scanner/harness syntax, authority and working/index whitespace checks
+passed with identical before/after source identities. Independent plan, test and implementation
+reviews approved the correction. Final documentation guards and complete final review remain
+required before publication, followed by current-head CI.
+
+Independent byte comparison supports reuse of the ten prior five-second progress results, exact
+raw UTF-8 helper output and archived long-root proof for the unchanged helper and existing paths.
+Those are prior measurements, not new timings of this scanner; the expanded harness and full-tree
+duration above are fresh. Native Git Bash and ShellCheck remain unverified. The existing physical-
+line and bounded-source limitations still apply, and R61 continues to require human review.
+
+## Leading addresses retain detection before prose punctuation (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The leading-address consumer removes a complete terminal run of sentence periods after its
+existing lexical boundary checks, including before quotes and closing delimiters. Only a whole
+core matching the existing hex or mapped grammar is normalized. Internal dots, extra mapped
+components, overlong groups and identifier continuations cannot become shortened matches.
+Mapped endpoints retain IPv4 ownership, exact loopback remains excluded, and the cursor advances
+by the original candidate length. Slice masking and all other scanner rules are unchanged.
+
+The original two-period fixture retains its payload and explicitly changes to exact-address
+rejection. A dated amendment in the original plan supersedes the earlier single-period contract;
+all historical text and other prior outcomes remain preserved. Focused regression evidence on
+the unchanged scanner recorded **46 passes and 61 intended failures** in 2.893 seconds. Controls
+for malformed tokens, mapped addresses, lexical continuations and exact loopback passed.
+
+The final expanded harness passed **1540 assertions** in **37.016 seconds**. The new public
+progress probe passed all **11 assertions in 2.635 seconds**, within its unchanged five-second
+limit. Its exact 65,580-byte payload includes 65,536 periods, one genuine numeric slice and two
+independently checked complete endpoint diagnostics. A reviewed builtin character check replaced
+a costly test-only string copy without changing that payload, assertion count or deadline.
+All eight explicit locks passed. The complete tracked tree scanned clean in **12.171 seconds**,
+below the fixed 30-second limit. Syntax, authority and working/index whitespace checks passed;
+before/after source identities matched.
+
+Independent reviews confirmed the helper and all previous progress workloads unchanged. Their
+nine prior progress results, exact raw UTF-8 helper output and archived long-root proof are reused
+for those identical paths; they were not newly timed on this punctuation scanner. The new probe
+and full-tree duration above are fresh measurements. Earlier comparison timings remain historical.
+Independent plan, test and implementation reviews approved this correction. Final documentation
+guards and complete final review remain required before publication, followed by current-head CI.
+Native Git Bash and ShellCheck remain unverified. The physical-line and bounded-source limitations
+recorded below still apply, and R61 continues to require human review.
+
+## Slice masking preserves literal address text (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The helper recognizes bounded source expressions from the original selected physical-line start.
+Quoted literals, backticks, comments and Markdown bullets retain their address text. A new frame
+after a semicolon requires a completed supported statement, and chained indexes require a
+recognized body. Quoted index keys retain literal brackets while permitting genuine later slices.
+Separated numeric atoms preserve token boundaries without inventing callable receivers.
+
+The helper reads fixed 4096-byte windows with absolute byte cursors. Source prefixes and slice
+bodies spanning windows are joined once; quotes stream with explicit escape carry. Lookahead
+keeps ordinary-index input intact unless a complete step qualifies for the existing mask.
+The expression predicates, step grammar and all scanner bytes outside this helper remain
+unchanged by the transport correction. No production dependency or file exemption was added.
+
+The initial literal-context regression recorded **1112 passing assertions and 207 intended
+failures** against the unchanged published guard. Independent fixture review confirmed all 118
+existing runtime inputs unchanged, including the original 17 slice controls and their neighbors.
+The later backtick control intentionally changes to rejection. Three reviewed progress framing
+amendments retain the original workload sizes and deadlines. Additional focused regressions
+cover normalized atom boundaries; nine byte-coordinate cases cover window boundaries, UTF-8,
+escapes, quoted keys, source transitions, unsupported triples and EOF.
+
+The final scanner passed **1437 assertions** in **39.451 seconds**. All nine progress workloads
+passed within unchanged five-second limits (0.150–3.754 seconds). This includes 2048 escaped
+literal/slice groups in 3.754 seconds and the complete two-pass all-slices case in 2.604 seconds.
+The quoted-key helper output matched all **8230 expected bytes**, preserving UTF-8 and exactly
+one final newline. The exact archived 65,562-byte call-root probe retained its endpoint and masked
+its genuine slice in **0.310 seconds**. All eight selected locks passed; the complete tracked tree
+scanned clean in **11.910 seconds**, below the fixed 30-second bound. Source identities remained
+unchanged. A final whitespace check identified one extra newline in the new plan amendment;
+removing it changes no historical text or scanner/test bytes.
+
+Independent plan, test and implementation reviews approved the correction. Final documentation
+guards and complete evidence review remain required before publication, followed by fresh
+current-head CI. The original controlled 4.45-fold comparison remains historical for its recorded
+source pair. The helper receives selected physical lines independently: it cannot infer strings
+or fences opened on earlier lines, and prose spelling a supported source expression is ambiguous.
+Native Git Bash and ShellCheck remain unverified. R61 continues to require human review.
+
+## Slice masking requires a framed source receiver (2026-10-11)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+Leading-compression addresses in prose brackets remain visible even when the preceding word
+resembles a call or an indexed receiver. Every accepted receiver now needs the original line
+start or an explicit source expression delimiter. Chained slices and ordinary indexes preserve
+that receiver's qualification; emitting a new chunk does not create a new line-start cue.
+Optional spaces/tabs, bounded calls and the existing step syntax remain supported.
+
+This remains a bounded lexical recognizer. Prose that deliberately spells an accepted source
+expression is ambiguous, and unsupported receiver spellings may require review. The package
+qualifier, IPv4 rules and all scanner code outside the slice helper are unchanged.
+
+The test-only regression run recorded **982 passing assertions and 72 intended failures**
+against the unchanged published guard. After repair, all **1054 assertions passed** in 29.870
+seconds, including all 952 earlier assertions and the original 17 slice positives. All eight
+progress probes returned the expected decisions within their fixed five-second deadlines
+(range 0.115–2.813 seconds). Two sparse fixtures gained explicit expression framing while
+preserving padding, Unicode content, token checks and deadlines; the small control's runtime
+payload is byte-identical. An additional public-gate probe with a 65,536-character ASCII call
+argument correctly masked its numeric slice and reported its neighboring address in 0.379 seconds.
+
+All eight explicit locks passed. The full tracked tree scanned clean in **6.597 seconds**, below
+the fixed 30-second bound. Syntax, authority and whitespace checks passed, with source identity
+unchanged. Independent plan, implementation and final evidence reviews are required before
+publication. The earlier 4.45-fold comparison is historical for its recorded source pair and is
+not a measurement of this follow-up. Native Git Bash and ShellCheck remain unverified; R61
+continues to require human review.
+
+## Public package version allowance checks lock context (2026-10-11)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The public click-plugins version assignment is now allowed only in an exact `uv.lock` basename
+with the ordered package header, exact package name, exact public version and public PyPI source.
+Qualification waits until the package closes. Duplicate ownership fields, incomplete declarations,
+multiline examples and unsupported array contexts deny the allowance. Supported dependency and
+wheel arrays remain accepted. This is a bounded recognizer for observed lock formatting, not a
+complete TOML parser; an unobserved spelling can require review rather than silently widening the
+allowance.
+
+Only the qualified assignment occurrence is masked. Other version-shaped endpoints, same-line
+neighbors and the rest of every selected lock remain scanned. The independent exact public
+artifact-URL rule and the indexed-slice helper remain unchanged, with no new runtime dependency.
+
+The unchanged published scanner reproduced false clean results for a standalone assignment in
+another file and an unrelated package in a lockfile. The first context regression run recorded
+640 passing assertions and 231 intended failures. Independent review then identified premature
+qualification at array rows; focused red evidence covered nested boolean/numeric arrays, partial
+openers, apparent comment closers and unclosed arrays before the final correction.
+
+The final expanded harness passed all **952 assertions** in 28.403 seconds, including genuine
+root/nested metadata, constrained-PATH, inline/multiline artifact and neighboring-token controls.
+All eight explicitly selected locks passed. The complete tracked-tree scan passed in **7.522
+seconds**, within the fixed 30-second bound. Syntax, repository-authority and whitespace checks
+passed; source identity was unchanged throughout verification.
+
+Independent plan, implementation and final evidence reviews are required before publication.
+The earlier 4.45-fold helper comparison below remains historical evidence for its recorded scanner
+hash. That helper and its progress probes are byte-identical in this follow-up; the new full-tree
+duration above measures the amended scanner. Native Git Bash and ShellCheck remain unverified.
+R61 still requires human review beyond these mechanical checks.
+
+## Site-data slice masking avoids per-character scans (2026-10-11)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The indexed-slice helper now scans bracket events and emits unchanged chunks, using byte offsets
+inside the helper. A bounded expression check replaces the character-by-character step loop.
+Receiver rules, mask boundaries, diagnostics, lock coverage and all other matchers remain unchanged.
+This removes the measured long-prefix and long-step stalls without adding a production dependency.
+
+Before the repair, the small control passed in 0.166 seconds while both the 64 KiB no-bracket and
+long-step cases exceeded the fixed five-second deadline. After repair, all eight progress workloads
+passed their expected decisions within that deadline; the slowest recorded case took 3.022 seconds.
+The unchanged default harness passed all 591 assertions, and all eight explicitly selected locks
+passed. The full tracked-tree scan passed in 6.197 seconds after two fixture-source literals were
+assembled from the existing numeric variable; their generated test payloads remained unchanged.
+
+After #640 merged with required CI passing, the integrated-tree comparison changed only this helper
+between two isolated snapshots with identical tracked inputs, tools and locale. One warmup per
+variant and three alternating pairs all returned complete clean verdicts within the fixed
+30-second deadline. The median fell from 28.003 to 6.289 seconds, a 4.45-fold speedup. Both fixture
+manifests and the original source/index remained unchanged. Fresh integrated checks passed all
+eight locks, the full tracked tree, repository authority and staged/unstaged whitespace checks.
+
+Independent plan and implementation reviews approved the helper and fixtures. Independent actual
+integration review verified every inherited main history section, the original #421 entry and all
+unrelated residual records were preserved. All inherited application/contracts/browser sources
+match accepted main. Final evidence review and current-head CI remain acceptance gates. Earlier
+test evidence is reused only where source is unchanged. Native Git Bash and ShellCheck remain
+unverified; slice recognition remains lexical and bounded, and the scanner remains a backstop to
+R61 human review.
+
+## Table baseline waits for root-font shell padding (2026-10-11)
+
+Follow-up candidate for [PR #640](https://github.com/CoJoA13/EasySynQ/pull/640), also addressing
+the same browser failure on [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642). The enlarged-text
+table test could record its baseline while the shell's 200ms padding transition was still running.
+Hosted failures measured table-left differences of 4.875px and 1.078125px with stable internal
+columns. The setup helper now flushes layout and waits, with a five-second bound, until the main
+element has no unfinished padding transitions. Existing physical assertions and their 1px limits
+remain unchanged.
+
+A controlled two-second transition reproduced a 52.953125px baseline error. The exact baseline
+contained four running padding transitions; the table then settled before any filter changed.
+With the helper repair, the same controlled setup passed with no unfinished transition at baseline.
+Removing fixed layout and compact column allocations still failed the original Last reviewed
+boundary assertion by 6.0625px. Restoring the production page and rebuilding passed **95/95 Chromium
+cases**, including all **19 legibility cases**, with zero skips, retries or flaky results
+(191.629 seconds wall time). Source and build identities were recorded for each state.
+
+Browser TypeScript/build and web lint passed. The first lint invocation included temporary report
+assets; removing those already archived coordinator files produced a pass on unchanged source.
+Independent plan, placement and implementation reviews approved the bounded setup correction.
+Final review and current-head GitHub CI remain merge gates. This evidence covers Chromium with
+synthetic fixtures; production layout, theme and dependencies were unchanged.
+
+## Credential-reset authority cross-reference aligned (2026-10-11)
+
+Follow-up candidate for [PR #640](https://github.com/CoJoA13/EasySynQ/pull/640).
+R66 rule 6 now explicitly retains the mandatory system-tier guard for every existing linked
+user's credential, including the caller's own. Review found that this cross-reference still said
+"another existing user" after R64 and doc 07 were aligned. No runtime or permission policy changes.
+
+The existing identity-onboarding authority test now checks R66 rule 6 separately from R64 and
+stops before rule 7. Against the unchanged sentence it failed at the new assertion; after the
+correction all four identity-onboarding contract tests passed. Independent review and current-head
+GitHub CI remain part of the merge handoff.
+
 ## Provider failures name the supported identity recovery (2026-10-10)
 
 Closure candidate for [#431](https://github.com/CoJoA13/EasySynQ/issues/431),
@@ -45,6 +353,72 @@ This dated entry records the tested closure candidate; final independent review 
 to its handoff. The residual is removed on this branch and closes through the reviewed PR merge.
 Four existing OpenAPI date/date-time warnings and a generator FutureWarning remain recorded.
 Live provider, sign-in and built-image acceptance are not claimed.
+
+## Credential reset affordance follows server system tier (2026-10-10)
+
+Closure candidate for [#430](https://github.com/CoJoA13/EasySynQ/issues/430),
+`RES-CREDENTIAL-RESET-R64-ALIGNMENT`. The roster now offers password issuance only when the caller
+holds `user.create` and the server reports system tier. `/me/permissions` returns a required
+`system_tier` boolean from the same unchanged PDP helper used by the reset guard. Missing or errored
+permission data hides the action. The admin effective-permissions response keeps its existing schema.
+R64 rule 5, doc 07 and the denial detail now state that every reset, including self-reset, requires
+system tier. The backend still evaluates current authority on every request.
+
+Regression proof against unchanged production produced two intended API unit failures, eight web
+failures and five database/API failures. Existing controls passed. After implementation, focused
+checks passed 15 API unit, 53 web and eight database tests. Broader verification passed 5,162 API
+unit tests, 285 response-contract cases, 56 affected integration cases and all 2,384 web tests in
+283 files. Ruff, format, mypy, web lint/build, canonical contract check, authority and site-data
+guards passed. Two API skips are explicitly release-image and opt-in built-image proofs.
+
+Commands include `uv run pytest tests/unit -m unit -q`, the contract-marked
+`tests/integration/test_contract_response_schemas.py`, and the integration-marked users provisioning,
+users admin, authz, me-permissions and credential-reset-authority suites in `apps/api`; `npm test`,
+`npm run lint` and `npm run build` in `apps/web`; and `bash scripts/gen-contracts.sh --check`,
+`bash scripts/check-repo-authority.sh` and `bash scripts/check-no-site-data.sh` from the repository.
+
+The isolated combination with #431 and #421 passed 147 focused API units, 285 response contracts,
+157 affected integrations, 77 web cases, 591 scanner assertions and the full-tree scan. Its contracts
+were canonically regenerated; this proves the shared helper/fixture and schema changes coexist.
+Independent plan and implementation reviews approved specification and engineering quality.
+This dated entry records the tested closure candidate; final independent review and PR CI belong
+to its handoff. The residual is removed on this branch and closes through the reviewed PR merge.
+Four existing OpenAPI date/date-time warnings and a generator FutureWarning remain recorded.
+Live identity-provider and built-image acceptance are not claimed. Permission-cache redesign and
+a self-reset exception remain outside this change.
+
+## Site-data guard covers all four deferred shapes (2026-10-10)
+
+Closure candidate for [#421](https://github.com/CoJoA13/EasySynQ/issues/421),
+`RES-SITE-DATA-GUARD-GAPS`. The scanner detects leading-compression IPv6 while masking only bounded
+indexed-slice spans. It preserves neighboring addresses and whole-token checks, including prose
+punctuation and mapped dotted forms. Default scanning includes textual locks and retains binary
+skipping. The observed public package version is allowed only in its exact reviewed metadata
+contexts. Legacy colon-hex fingerprints accept both byte cases at the existing length, and every
+file-consuming matcher terminates options before filenames.
+
+Against the unchanged scanner, the expanded harness had 275 passing assertions and 316 intended
+failures covering the four gaps and narrow metadata allowance. Existing controls remained green.
+The implementation passed all 591 assertions, shell syntax, the full tracked-tree scan and explicit
+selection of all eight inspected locks. No application or lock content changed.
+
+Commands were `bash -n scripts/check-no-site-data.sh scripts/tests/test-check-no-site-data.sh`,
+`bash scripts/tests/test-check-no-site-data.sh`, `bash scripts/check-no-site-data.sh`, and an explicit
+scan of `apps/api/uv.lock`, `apps/web/package-lock.json`, `infra/images.lock`,
+`packages/contracts/.contract.lock`, `packages/contracts/package-lock.json`, the npm-audit lock
+fixture, and both uv-lock-provenance fixtures. `git diff --check` and the repository authority guard
+passed. On the isolated combined candidate with #430/#431 and canonically regenerated contracts,
+the 591-assertion harness and complete tracked-tree scan passed again. Four separately staged
+synthetic probes in a disposable copy of that complete candidate each failed the real gate with
+the expected rule and file diagnostic: leading IPv6, textual lock, lowercase fingerprint and
+option filename. Removing those probes restored the clean verdict; raw diagnostics were inspected.
+
+Independent plan and implementation reviews approved specification and engineering quality.
+This dated entry records the tested closure candidate; final independent review and PR CI belong
+to its handoff. The residual is removed on this branch and closes through the reviewed PR merge.
+Native Git Bash and ShellCheck were unavailable and remain unverified. Constrained GNU shell PATH
+fixtures prove the dependency boundary separately. Slice recognition is intentionally lexical and
+bounded; the mechanical scanner remains a backstop to R61 human review.
 
 ## Interested-parties columns scale with text and accommodate CI rendering (2026-10-10)
 

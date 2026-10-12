@@ -627,6 +627,9 @@ paths:
         discovering their own affordances). A coarse SYSTEM-scope answer by default; the optional
         scope_level/scope_id refine it (e.g. document.create at a DOC_CLASS). Per-document write
         buttons gate on the document's capabilities block (GET /documents/{id}) instead.
+        system_tier reports the caller's administrative tier using the same effective
+        non-content-only permission.grant rule as the server guards, always at SYSTEM scope
+        regardless of scope_level/scope_id.
       parameters:
         - name: scope_level
           in: query
@@ -642,10 +645,10 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: The caller's effective permissions with provenance.
+          description: The caller's effective permissions with provenance and administrative tier.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/EffectivePermissions" }
+              schema: { $ref: "#/components/schemas/MyEffectivePermissions" }
         "401":
           description: Missing, invalid, or expired token.
           content:
@@ -7761,6 +7764,26 @@ components:
         permissions:
           type: array
           items: { $ref: "#/components/schemas/EffectivePermissionEntry" }
+
+    MyEffectivePermissions:
+      type: object
+      additionalProperties: false
+      required: [scope, permissions, system_tier]
+      properties:
+        scope:
+          type: object
+          additionalProperties: true
+          description: The scope the permissions were resolved at.
+        permissions:
+          type: array
+          items: { $ref: "#/components/schemas/EffectivePermissionEntry" }
+        system_tier:
+          type: boolean
+          description: >-
+            Whether the caller satisfies the server's effective non-content-only permission.grant
+            tier rule at SYSTEM scope, including scope, predicates and deny precedence. Evaluated
+            independently of the scope requested for permission keys; user.create alone does not
+            confer this tier.
 
     DistributionEntry:
       type: object

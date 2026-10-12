@@ -37,21 +37,32 @@ const OTHER_USER = {
   roles: [],
 } satisfies AdminUser;
 
-// Grants `user.create` — the same key the API gates .../temporary-password on — so the Manage
-// drawer's "Issue new temp password" affordance renders (S-user-create Task 8 gates it client-side
-// too, per DP-6: never offer a control the caller cannot exercise).
+// A granular account creator has no system-tier authority to reset existing credentials.
 function grantUserCreate() {
   grantPermissions(["user.create"]);
 }
 
-function grantPermissions(keys: string[]) {
+function grantResetAuthority() {
+  grantPermissions(["user.create"], true);
+}
+
+function grantPermissions(keys: string[], systemTier = false) {
   server.use(
     http.get("/api/v1/me/permissions", () =>
       HttpResponse.json({
         scope: { level: "SYSTEM", selector: null },
+        system_tier: systemTier,
         permissions: keys.map((key) => ({ key, effect: "ALLOW", source: null })),
       }),
     ),
+  );
+}
+
+function serveRoster() {
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
   );
 }
 
@@ -343,7 +354,7 @@ test("the Create user button is absent without user.create (DP-6: no dead contro
 test("the Manage drawer's Issue new temp password action posts to the reissue endpoint for the right user and renders the show-once password", async () => {
   const NEW_PASSWORD = "Zq7-Falcon-Anchor-19";
   let capturedUrl: string | undefined;
-  grantUserCreate();
+  grantResetAuthority();
   server.use(
     http.get("/api/v1/users", () => HttpResponse.json([USER])),
     http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
@@ -376,7 +387,7 @@ test("the Manage drawer's reissued password does not linger in TanStack Query's 
   // close the drawer or unmount ManageUser, so this is the scenario where nothing but an explicit
   // resetMut.reset() scrubs the mutation cache's own retained copy of the password.
   const NEW_PASSWORD = "Zq7-Falcon-Anchor-19";
-  grantUserCreate();
+  grantResetAuthority();
   server.use(
     http.get("/api/v1/users", () => HttpResponse.json([USER])),
     http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
@@ -437,7 +448,7 @@ test("the Issue new temp password action is absent without user.create (DP-6: no
 
 test("switching the Manage drawer directly to a different user does not carry over the previous user's issued password", async () => {
   const MARAS_PASSWORD = "Mara-Only-Secret-1";
-  grantUserCreate();
+  grantResetAuthority();
   server.use(
     http.get("/api/v1/users", () => HttpResponse.json([USER, OTHER_USER])),
     http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
@@ -486,7 +497,7 @@ test("the Manage drawer refuses to close while a temporary password issuance is 
   // handler that does not resolve until `release` is called reproduces the "still in flight" window
   // long enough to prove every closing route is blocked for its entire duration.
   const NEW_PASSWORD = "In-Flight-Guard-Pw-7";
-  grantUserCreate();
+  grantResetAuthority();
   let release: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -538,7 +549,7 @@ test("the Manage drawer refuses to close while a temporary password issuance is 
 test("a failed temporary password issuance leaves the Manage drawer closable, not wedged open", async () => {
   // The busy flag is set in resetMut's onMutate and must be cleared in onSettled (fires on BOTH
   // outcomes) — not only in onSuccess — or a failed issuance would wedge the drawer open forever.
-  grantUserCreate();
+  grantResetAuthority();
   let release: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -608,4 +619,151 @@ test("opening the modal removes the ambiguous duplicate of the Create user butto
   // so there is still only ONE "Create user" button (the header), not a duplicate.
   expect(screen.getAllByRole("button", { name: "Create user" })).toHaveLength(1);
   expect(screen.getByRole("button", { name: "Create" })).toBeInTheDocument();
+});
+
+test("a granular user.create holder can create users but cannot reset credentials", async () => {
+  serveRoster();
+  let resets = 0;
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "user.create", effect: "ALLOW", source: "user_override" }],
+        system_tier: false,
+      }),
+    ),
+    http.post("/api/v1/users/:id/temporary-password", () => {
+      resets += 1;
+      return HttpResponse.json({ code: "two_tier_violation" }, { status: 422 });
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await within(drawer).findByText("No roles assigned.");
+  await settlePermissions(queryClient);
+
+  expect(screen.getByRole("button", { name: "Create user" })).toBeInTheDocument();
+  expect(within(drawer).queryByText("Credentials")).toBeNull();
+  expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
+  expect(resets).toBe(0);
+});
+
+test.each([
+  { name: "system tier without user.create", tier: true, effect: null },
+  { name: "system tier with denied user.create", tier: true, effect: "DENY" },
+  { name: "user.create with missing tier", tier: undefined, effect: "ALLOW" },
+])("hides credential reset for $name", async ({ tier, effect }) => {
+  serveRoster();
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: effect ? [{ key: "user.create", effect, source: "user_override" }] : [],
+        ...(tier === undefined ? {} : { system_tier: tier }),
+      }),
+    ),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await within(drawer).findByText("No roles assigned.");
+  await settlePermissions(queryClient);
+
+  expect(within(drawer).queryByText("Credentials")).toBeNull();
+  expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
+});
+
+test("hides credential reset until server tier authority resolves", async () => {
+  serveRoster();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let requested = false;
+  server.use(
+    http.get("/api/v1/me/permissions", async () => {
+      requested = true;
+      await gate;
+      return HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "user.create", effect: "ALLOW", source: "user_override" }],
+        system_tier: true,
+      });
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  try {
+    await within(drawer).findByText("No roles assigned.");
+    await waitFor(() => expect(requested).toBe(true));
+    await act(async () => flushTestQueryNotifications());
+    expect(queryClient.getQueryState(["me-permissions", "SYSTEM", null])?.status).toBe("pending");
+    expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
+  } finally {
+    await act(async () => release?.());
+    await settlePermissions(queryClient);
+  }
+  expect(within(drawer).getByRole("button", { name: "Issue new temp password" })).toBeInTheDocument();
+});
+
+test("hides credential reset when the permission endpoint fails", async () => {
+  serveRoster();
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({ code: "unavailable", title: "Unavailable" }, { status: 503 }),
+    ),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await within(drawer).findByText("No roles assigned.");
+  await waitFor(() => {
+    expect(queryClient.getQueryState(["me-permissions", "SYSTEM", null])?.status).toBe("error");
+    expect(queryClient.isFetching()).toBe(0);
+  });
+  await act(async () => flushTestQueryNotifications());
+
+  expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
+});
+
+test("hides credential reset after a failed refresh retains cached tier authority", async () => {
+  serveRoster();
+  grantResetAuthority();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await within(drawer).findByRole("button", { name: "Issue new temp password" });
+  await settlePermissions(queryClient);
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({ code: "unavailable", title: "Unavailable" }, { status: 503 }),
+    ),
+  );
+
+  await act(async () => {
+    await queryClient.invalidateQueries({ queryKey: ["me-permissions"] });
+    await flushTestQueryNotifications();
+  });
+  await waitFor(() => {
+    expect(queryClient.getQueryState(["me-permissions", "SYSTEM", null])?.status).toBe("error");
+    expect(queryClient.isFetching()).toBe(0);
+  });
+  await act(async () => flushTestQueryNotifications());
+
+  expect(queryClient.getQueryData(["me-permissions", "SYSTEM", null])).toMatchObject({
+    system_tier: true,
+  });
+  expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
 });

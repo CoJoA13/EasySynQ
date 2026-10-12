@@ -167,6 +167,26 @@ async function applyPartyRootFontSize(page: Page, rootFontSize: number) {
   await page.evaluate(async () => {
     await document.fonts.ready;
   });
+  // Changing the root size also animates the shell's rem padding. Fonts can be ready while
+  // that ancestor still moves the table, so wait before recording its baseline geometry.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const main = document.getElementById("main-content");
+          if (!(main instanceof HTMLElement)) throw new Error("Missing shell main for party layout");
+          main.getBoundingClientRect();
+          return main.getAnimations().filter(
+            (animation) =>
+              animation instanceof CSSTransition &&
+              animation.transitionProperty.startsWith("padding") &&
+              (animation.pending ||
+                (animation.playState !== "finished" && animation.playState !== "idle")),
+          ).length;
+        }),
+      { timeout: 5_000, message: "Shell padding must settle after changing the root font size" },
+    )
+    .toBe(0);
   const after = await read();
   expect(after.rootFontSize).toBe(rootFontSize);
   expect(after.textFontSize).toBe(rootFontSize === 20 ? 17.5 : 14);

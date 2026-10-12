@@ -176,6 +176,7 @@ export interface MePermissionEntry {
 export interface MePermissions {
   scope: { level: string; selector: Record<string, unknown> | null };
   permissions: MePermissionEntry[];
+  system_tier: boolean;
 }
 
 export type ChangeSignificance = "MAJOR" | "MINOR";
