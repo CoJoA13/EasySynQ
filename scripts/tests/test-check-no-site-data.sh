@@ -1458,5 +1458,268 @@ expect_rejection "option payload default" "$ipv4_rule" "$option_filename:1"
 run_gate "$repo" "$PATH" "$option_filename"
 expect_rejection "option payload explicit" "$ipv4_rule" "$option_filename:1"
 
+# Pathnames remain transport metadata; content alone determines matching and allowances.
+run_path_transport_cases() {
+  local filename token content label mode rule kind display_path script_line
+  local index=0 first second third numeric owner owner_lower owner_metadata package public_release
+  local unsafe_home safe_home unsafe_windows unsafe_email safe_email unsafe_host safe_host
+  local unsafe_mac_token safe_mac_token legacy_token doc_legacy ssh_token colon_fingerprint
+  local lock_path='scope:cache/uv.lock'
+  first="${slice_prefix}abcd"
+  second="${slice_prefix}def0"
+  third="${slice_prefix}ab01"
+  numeric="${slice_prefix}2"
+  owner="$(printf '%s%s' 'Path' 'Owner')"
+  owner_lower="${owner,,}"
+  unsafe_home="$(printf '/%s/%s' 'home' 'fixture-user')"
+  safe_home="$(printf '/%s/%s' 'home' 'easysynq')"
+  unsafe_windows="$(printf '%s:%s%s%s%s' 'C' '\' 'Users' '\' 'fixture-user')"
+  unsafe_email="$(printf '%s@%s.%s' 'operator' 'fixture' 'local')"
+  safe_email="$(printf '%s@%s.%s' 'operator' 'example' 'com')"
+  unsafe_host="$(printf '%s.%s' 'fixture-host' 'local')"
+  safe_host="$(printf '%s.%s' 'example' 'local')"
+  unsafe_mac_token="$(printf '%s:%s:%s:%s:%s:%s' 'aa' 'bb' 'cc' 'dd' 'ee' 'ff')"
+  safe_mac_token="$(printf '%s:%s:%s:%s:%s:%s' '00' '15' '5D' '00' '00' '01')"
+  legacy_token="$(printf '%s%s%s' 'fd00' "$slice_prefix" '1')"
+  doc_legacy="$(printf '%s:%s%s%s' '2001' 'db8' "$slice_prefix" '1')"
+  ssh_token="$(printf 'SHA%s:%043d' '256' 0)"
+  colon_fingerprint="$(printf 'ab:%.0s' {1..15})ab"
+
+  local -a path_names=(
+    'x:endpoint' 'space endpoint' $'line\nendpoint' 'quoted"endpoint'
+    'back\endpoint' $'x:line\n end' '--exclude=probe.txt' '-' 'normal.txt'
+  )
+  for filename in "${path_names[@]}"; do
+    index=$((index + 1))
+    label="path-name-$index"
+    new_text_case "$label" "$(printf '%s\n%s' 'portable fixture' "$first")" "$filename"
+    for mode in default explicit; do
+      if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" "$filename"; fi
+      expect_rejection "$label $mode" "$ipv6_rule" ":2:$first"
+      assert_contains "$label $mode retains the complete line-two token" "$RUN_OUTPUT" ":2:$first"$'\n'
+      case "$filename" in
+        *[$' \t\n']*) ;;
+        *)
+          display_path="$filename"
+          [ "$filename" != '-' ] || display_path='./-'
+          assert_contains "$label $mode attributes the exact path" "$RUN_OUTPUT" "$display_path:2:$first"$'\n'
+          ;;
+      esac
+    done
+  done
+
+  new_text_case 'path-colon-slice' "values[$numeric]" 'x:endpoint'
+  for mode in default explicit; do
+    if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" 'x:endpoint'; fi
+    expect_clean "path-colon-slice $mode"
+    assert_not_contains "path-colon-slice $mode keeps pathname out of source context" "$RUN_OUTPUT" "$ipv6_rule"
+  done
+  index=0
+  for filename in $'benign\nname' '-' '--exclude=probe.txt'; do
+    index=$((index + 1))
+    label="path-benign-$index"
+    new_text_case "$label" 'portable fixture' "$filename"
+    for mode in default explicit; do
+      if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" "$filename"; fi
+      expect_clean "$label $mode"
+    done
+  done
+  new_text_case 'path-colon-quoted' "$(printf '%s\nendpoint="%s"' 'portable fixture' "$first")" 'x:endpoint'
+  for mode in default explicit; do
+    if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" 'x:endpoint'; fi
+    expect_rejection "path-colon-quoted $mode" "$ipv6_rule" "x:endpoint:2"
+    assert_contains "path-colon-quoted $mode retains exact content and line" "$RUN_OUTPUT" "x:endpoint:2:$first"$'\n'
+  done
+
+  for kind in ipv6 ipv4; do
+    label="path-no-final-lf-$kind"
+    filename='x:endpoint'
+    token="$first"; rule="$ipv6_rule"
+    if [ "$kind" = ipv4 ]; then filename=$'final\nendpoint'; token="$unsafe_ipv4"; rule="$ipv4_rule"; fi
+    new_text_case "$label" 'portable fixture' "$filename"
+    printf '%s\n%s' 'portable fixture' "$token" >"$repo/$filename"
+    for mode in default explicit; do
+      if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" "$filename"; fi
+      expect_rejection "$label $mode" "$rule" ":2:$token"
+      assert_contains "$label $mode preserves the final input line" "$RUN_OUTPUT" ":2:$token"$'\n'
+    done
+  done
+
+  repo="$TEST_ROOT/path-multiple-records"
+  new_repo "$repo"
+  printf 'values[%s]\n' "$numeric" >"$repo/a:slice"
+  filename=$'z\nendpoint'
+  printf '%s\n%s %s\n%s\n' 'portable fixture' "$first" "$second" "$third" >"$repo/$filename"
+  git -C "$repo" add -- 'a:slice' "$filename"
+  for mode in default explicit; do
+    if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" 'a:slice' "$filename"; fi
+    expect_rejection "path-multiple-records $mode" "$ipv6_rule" ":2:"
+    assert_contains "path-multiple-records $mode retains the first complete token" "$RUN_OUTPUT" ":2:$first"$'\n'
+    assert_contains "path-multiple-records $mode retains the second complete token" "$RUN_OUTPUT" ":2:$second"$'\n'
+    assert_contains "path-multiple-records $mode retains the later physical line" "$RUN_OUTPUT" ":3:$third"$'\n'
+    assert_not_contains "path-multiple-records $mode preserves the earlier file's slice mask" "$RUN_OUTPUT" "$numeric"$'\n'
+  done
+
+  public_release="$(printf '%s.%s.%s.%s' '1' '1' '1' '2')"
+  package="$(printf '[[package]]\nname = "click-plugins"\nversion = "%s"\nsource = { registry = "https://pypi.org/simple" }' "$public_release")"
+  repo="$TEST_ROOT/path-qualified-lock"
+  new_repo "$repo"
+  mkdir -p "$repo/scope:cache"
+  printf '%s' "$package" >"$repo/$lock_path"
+  git -C "$repo" add -- "$lock_path"
+  for mode in default explicit shell-only; do
+    case "$mode" in
+      default) run_gate "$repo" "$PATH" ;;
+      explicit) run_gate "$repo" "$PATH" "$lock_path" ;;
+      shell-only) run_gate "$repo" "$fake_bin" "$lock_path" ;;
+    esac
+    expect_clean "path-qualified-lock $mode"
+    assert_not_contains "path-qualified-lock $mode preserves its exact cache key" "$RUN_OUTPUT" ":3:$public_release"$'\n'
+  done
+  repo="$TEST_ROOT/path-qualified-lock-neighbor"
+  new_repo "$repo"
+  mkdir -p "$repo/scope:cache"
+  printf '[[package]]\nname = "click-plugins"\nversion = "%s" # endpoint=%s\nsource = { registry = "https://pypi.org/simple" }\n' \
+    "$public_release" "$unsafe_ipv4" >"$repo/$lock_path"
+  git -C "$repo" add -- "$lock_path"
+  for mode in default explicit; do
+    if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" "$lock_path"; fi
+    expect_rejection "path-qualified-lock-neighbor $mode" "$ipv4_rule" "$lock_path:3"
+    assert_contains "path-qualified-lock-neighbor $mode retains the complete unsafe token" "$RUN_OUTPUT" "$lock_path:3:$unsafe_ipv4"$'\n'
+    assert_not_contains "path-qualified-lock-neighbor $mode masks only the version occurrence" "$RUN_OUTPUT" "$lock_path:3:$public_release"$'\n'
+  done
+
+  new_text_case 'path-empty-selection' 'portable fixture'
+  run_gate "$repo" "$PATH" 'untracked-selection.txt'
+  assert_exit 'path-empty-selection succeeds' 0 "$RUN_CODE"
+  assert_not_contains 'path-empty-selection preserves the silent empty-file exit' "$RUN_OUTPUT" 'check-no-site-data: clean'
+  assert_not_contains 'path-empty-selection has no IPv6 diagnostic' "$RUN_OUTPUT" "$ipv6_rule"
+  repo="$TEST_ROOT/path-scanner-selection"
+  new_repo "$repo"
+  script_line="$(wc -l <"$repo/scripts/check-no-site-data.sh")"
+  script_line=$((script_line + 1))
+  printf '# fixture endpoint=%s\n' "$first" >>"$repo/scripts/check-no-site-data.sh"
+  git -C "$repo" add -- scripts/check-no-site-data.sh
+  run_gate "$repo" "$PATH"
+  expect_clean 'path-scanner-selection default'
+  assert_not_contains 'path-scanner-selection excludes only the exact scanner pathname' "$RUN_OUTPUT" "$ipv6_rule"
+  run_gate "$repo" "$PATH" scripts/check-no-site-data.sh
+  expect_rejection 'path-scanner-selection explicit' "$ipv6_rule" "scripts/check-no-site-data.sh:$script_line"
+  assert_contains 'path-scanner-selection explicit includes the complete fixture token' "$RUN_OUTPUT" \
+    "scripts/check-no-site-data.sh:$script_line:$first"$'\n'
+
+  local -a path_routes=(linux windows workstation email dossier legacy hostname mac fingerprint openssh)
+  for kind in "${path_routes[@]}"; do
+    case "$kind" in
+      linux) token="$unsafe_home"; rule='Personal Linux home path' ;;
+      windows) token="$unsafe_windows"; rule='Personal Windows profile path' ;;
+      workstation) token="$(printf '%s %s %s' 'this' 'Linux' 'machine')"; rule='Installation/workstation-specific prose' ;;
+      email) token="$unsafe_email"; rule='Non-example email address' ;;
+      dossier) token="$(printf '%s %s' 'this is a site-specific' 'deployment design')"; rule='Site-deployment dossier prose' ;;
+      legacy) token="$legacy_token"; rule="$ipv6_rule" ;;
+      hostname) token="$unsafe_host"; rule='Non-example .local hostname' ;;
+      mac) token="$unsafe_mac_token"; rule='MAC address' ;;
+      fingerprint) token="$colon_fingerprint"; rule="$fingerprint_rule" ;;
+      openssh) token="$ssh_token"; rule='OpenSSH SHA256 key fingerprint' ;;
+    esac
+    label="path-adapter-$kind"
+    filename=$'route\n'"$kind"
+    new_text_case "$label" "$(printf '%s\n%s' 'portable fixture' "$token")" "$filename"
+    for mode in default explicit; do
+      if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" "$filename"; fi
+      expect_rejection "$label $mode" "$rule" ':2:'
+      case "$kind" in
+        workstation|dossier) ;;
+        *) assert_contains "$label $mode retains its complete match" "$RUN_OUTPUT" ":2:$token"$'\n' ;;
+      esac
+    done
+  done
+
+  filename=$'x:line\n endpoint'
+  new_text_case 'path-shell-only' "$(printf '%s\n%s' 'portable fixture' "$first")" "$filename"
+  run_gate "$repo" "$fake_bin" "$filename"
+  expect_rejection 'path-shell-only' "$ipv6_rule" ":2:$first"
+  assert_contains 'path-shell-only preserves the complete token without a language runtime' "$RUN_OUTPUT" ":2:$first"$'\n'
+  new_text_case 'path-binary' 'portable fixture' $'binary\nfixture'
+  printf '\0%s\n%s\n' "$unsafe_ipv4" "$ssh_token" >"$repo/"$'binary\nfixture'
+  for mode in default explicit; do
+    if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" $'binary\nfixture'; fi
+    expect_clean "path-binary $mode"
+  done
+
+  local -a path_allowed=("$safe_home" "$safe_email" "$doc_legacy" "$safe_host" "$safe_mac_token" \
+    "$(printf '%s.%s.%s.%s' '192' '0' '2' '1')" "$mapped_doc")
+  local -a path_allowed_rules=('Personal Linux home path' 'Non-example email address' "$ipv6_rule" \
+    'Non-example .local hostname' 'MAC address' "$ipv4_rule" "$ipv6_rule")
+  for ((index=0; index<${#path_allowed[@]}; index++)); do
+    label="path-allowed-$index"
+    filename=$'allowed\nfixture'
+    new_text_case "$label" "${path_allowed[index]}" "$filename"
+    for mode in default explicit; do
+      if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" "$filename"; fi
+      expect_clean "$label $mode"
+      assert_not_contains "$label $mode has no orphan filename record" "$RUN_OUTPUT" "${path_allowed_rules[index]}"
+    done
+  done
+
+  for kind in legacy linux mac; do
+    case "$kind" in
+      legacy) filename='prefix:2001:db8:probe'; token="$legacy_token"; rule="$ipv6_rule" ;;
+      linux) filename='prefix/home/easysynq/probe'; token="$unsafe_home"; rule='Personal Linux home path' ;;
+      mac) filename="${safe_mac_token}:probe"; token="$unsafe_mac_token"; rule='MAC address' ;;
+    esac
+    label="path-no-filename-allowance-$kind"
+    repo="$TEST_ROOT/$label"
+    new_repo "$repo"
+    mkdir -p "$repo/$(dirname -- "$filename")"
+    printf '%s\n%s\n' 'portable fixture' "$token" >"$repo/$filename"
+    git -C "$repo" add -- "$filename"
+    for mode in default explicit; do
+      if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" "$filename"; fi
+      expect_rejection "$label $mode" "$rule" "$filename:2"
+      assert_contains "$label $mode decides allowance from the complete content token" "$RUN_OUTPUT" "$filename:2:$token"$'\n'
+    done
+  done
+  filename='prefix:2001:db8:probe'
+  new_text_case 'path-legacy-content-allowance' "$(printf '%s\n%s' 'portable fixture' "$doc_legacy")" "$filename"
+  for mode in default explicit; do
+    if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" "$filename"; fi
+    expect_clean "path-legacy-content-allowance $mode"
+    assert_not_contains "path-legacy-content-allowance $mode preserves the genuine documentation sanction" "$RUN_OUTPUT" "$ipv6_rule"
+  done
+  filename="prefix:$(printf '%s.%s.%s.%s' '192' '0' '2' '1'):probe"
+  new_text_case 'path-ipv4-content-allowance' "$(printf '%s\n%s' 'portable fixture' "$unsafe_ipv4")" "$filename"
+  for mode in default explicit; do
+    if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" "$filename"; fi
+    expect_rejection "path-ipv4-content-allowance $mode" "$ipv4_rule" "$filename:2"
+    assert_contains "path-ipv4-content-allowance $mode retains the actual complete token" "$RUN_OUTPUT" "$filename:2:$unsafe_ipv4"$'\n'
+  done
+
+  owner_metadata="$(printf 'https://github.com/%s/EasySynQ\n%s/EasySynQ\nghcr.io/%s/easysynq/minio:RELEASE.X\nOwner: %s' \
+    "$owner" "$owner" "$owner_lower" "$owner")"
+  filename="${owner}:metadata"
+  new_text_case 'path-owner-filename-metadata' "$owner_metadata" "$filename"
+  git -C "$repo" remote add origin "https://github.com/$owner/EasySynQ.git"
+  for mode in default explicit; do
+    if [ "$mode" = default ]; then run_gate "$repo" "$PATH"; else run_gate "$repo" "$PATH" "$filename"; fi
+    expect_clean "path-owner-filename-metadata $mode"
+    assert_not_contains "path-owner-filename-metadata $mode uses source-only identity checks" "$RUN_OUTPUT" '<redacted-personal-identifier>'
+  done
+  filename=$'owner:\nidentity'
+  new_text_case 'path-owner-redacted' "$(printf '%s\nshellOwner: %s' "$owner_metadata" "$owner")" "$filename"
+  git -C "$repo" remote add origin "https://github.com/$owner/EasySynQ.git"
+  for mode in default explicit shell-only; do
+    case "$mode" in
+      default) run_gate "$repo" "$PATH" ;;
+      explicit) run_gate "$repo" "$PATH" "$filename" ;;
+      shell-only) run_gate "$repo" "$fake_bin" "$filename" ;;
+    esac
+    expect_rejection "path-owner-redacted $mode" 'Repository-owner token used as a personal identifier' ':5:'
+    assert_contains "path-owner-redacted $mode preserves the original line with a complete marker" "$RUN_OUTPUT" ":5:<redacted-personal-identifier>"$'\n'
+    assert_not_contains "path-owner-redacted $mode never echoes the source identity" "$RUN_OUTPUT" "$owner"
+  done
+}
+run_path_transport_cases
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -242,3 +242,43 @@ LF-bounded IPv6 diagnostics even when an unsafe IPv4 suffix independently reject
 behavior, locks, tracked-tree and source/authority/whitespace evidence remain required. Existing
 helper and progress proofs may be reused only after independent preservation review; their old
 timings do not measure the amended whole scanner. Native Git Bash and ShellCheck remain unverified.
+
+### 2026-10-12 amendment: preserve pathname and source boundaries
+
+A later review found that a colon in a tracked filename could become source context when the
+scanner split a grep record, hiding a leading address or changing a genuine slice's verdict.
+The same ambiguity affected IPv4 package qualification. Git's display quoting could also cause
+unusual tracked names to be skipped. Further regression evidence showed that filename text could
+grant an address exemption when a filter inspected the complete diagnostic instead of its token.
+
+This amendment supersedes the earlier pathname transport only. Read the tracked list with
+[Git's NUL format](https://git-scm.com/docs/git-ls-files#_output), preserving raw names and existing
+pathspec selection. Default selection excludes only the exact scanner path; explicit selection
+still includes it. Spell the exact dash-named file as `./-` for grep so it remains a file operand.
+Use [GNU grep's uppercase `-Z` filename separator](https://www.gnu.org/software/grep/manual/html_node/Output-Line-Prefix-Control.html)
+and paired Bash reads for each pathname and physical-line record. Content retains its colons,
+whitespace, backslashes and physical line number, including a final line without a newline.
+
+Apply the existing exemptions to matched source tokens before attaching their filenames. Keep
+the exemption expressions and case behavior unchanged, with case-insensitive handling isolated
+from later scanner functions. The owner check uses its existing metadata normalization on source
+text only and emits the original physical line number with the existing redacted marker instead
+of the source text. Raw paths remain file operands and package-cache keys. Only newline-bearing diagnostic paths use Bash's printable shell
+representation; ordinary diagnostics and the existing reporter remain unchanged. The reporter's
+space-splitting limitation is not a byte-exact filename display guarantee.
+
+The slice helper, address grammars, mapped policy, candidate advancement, punctuation handling and
+package qualifier retain their prior behavior. The OpenSSH producer's existing binary behavior
+and flags remain unchanged. No new executable or production test hook is introduced. Preserve all
+previous 1744 assertions, ten progress workloads, payloads and deadlines. Focused tests must first
+show missed/corrupted records and filename-granted allowances on the unchanged scanner, while
+covering legitimate slices, approved locks, all moved exemption families, owner redaction,
+multiple records, explicit selection, unusual names and constrained PATH.
+
+The owner branch deliberately reuses its exact sed/grep pipeline per selected source record.
+That cost requires fresh full-tree timing under the existing 30-second bound; static inventory
+is not a performance result. Fresh expanded behavior, syntax, eight-lock and repository guards,
+source identities and independent final review remain required. Prior progress and raw-helper
+proofs may be reused only for independently preserved paths and must retain their original source
+and timing labels. Native Git Bash and ShellCheck remain unverified. All prior text remains
+historical evidence; this amendment does not rewrite earlier claims or add site-data sanctions.

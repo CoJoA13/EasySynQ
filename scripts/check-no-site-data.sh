@@ -22,39 +22,62 @@ cd "$(dirname "$0")/.."
 fail=0
 report() { fail=1; printf '\n%s\n' "$1"; shift; printf '  %s\n' "$@"; }
 
+FILES=()
 if [ $# -gt 0 ]; then
-  mapfile -t FILES < <(git ls-files -- "$@")
+  while IFS= read -r -d '' path; do
+    [ "$path" != '-' ] || path='./-'
+    FILES+=("$path")
+  done < <(git ls-files -z -- "$@")
 else
   # EVERY tracked file — binaries are skipped by `grep -I` below, not by an extension allowlist
   # (an allowlist silently exempts JSON/TOML/HTML/Dockerfiles, exactly where a stray IP hides).
   # Skip only this script, which quotes the patterns it hunts for. Textual locks can contain
   # installation endpoints too; machine-written content is not a reason to leave it uninspected.
-  mapfile -t FILES < <(git ls-files \
-    | grep -vE -- '^scripts/check-no-site-data\.sh$')
+  while IFS= read -r -d '' path; do
+    [ "$path" != 'scripts/check-no-site-data.sh' ] || continue
+    [ "$path" != '-' ] || path='./-'
+    FILES+=("$path")
+  done < <(git ls-files -z)
 fi
 [ ${#FILES[@]} -gt 0 ] || exit 0
+
+# Keep filenames out of allowance decisions and LF-bearing names inside one diagnostic record.
+diagnostic_matches() (
+  local exclusion="$1" ignore_case="$2" path record line text display_path
+  shift 2
+  if [ "$ignore_case" -eq 1 ]; then shopt -s nocasematch; else shopt -u nocasematch; fi
+  while IFS= read -r -d '' path && IFS= read -r record; do
+    line="${record%%:*}"
+    text="${record#*:}"
+    [[ -n "$exclusion" && ":$text" =~ $exclusion ]] && continue
+    display_path="$path"
+    if [[ "$path" == *$'\n'* ]]; then printf -v display_path '%q' "$path"; fi
+    printf '%s:%s:%s\n' "$display_path" "$line" "$text"
+  done < <(grep -Z "$@" 2>/dev/null || true)
+  return 0
+)
 
 # --- personal home/profile paths --------------------------------------------------------------
 # Repository instructions must be portable. A literal shell user's home path is both identity
 # data and a reliable workstation fingerprint. The appliance service account path is shipped
 # product structure, not an operator identity, so it is the one sanctioned literal.
-hits="$(grep -nHoIE '(^|[^A-Za-z0-9._-])/(var/)?home/[A-Za-z0-9._-]+' -- "${FILES[@]}" 2>/dev/null \
-  | grep -vE -- '/home/easysynq($|/)' || true)"
+hits="$(diagnostic_matches '/home/easysynq($|/)' 0 \
+  -nHoIE '(^|[^A-Za-z0-9._-])/(var/)?home/[A-Za-z0-9._-]+' -- "${FILES[@]}")"
 [ -z "$hits" ] || report "Personal Linux home path (R61) — use a repo-relative path or <repo>:" $hits
 
-hits="$(grep -nHoIE '([A-Za-z]:[/\\]|/[A-Za-z]/)Users[/\\][A-Za-z0-9._-]+' -- "${FILES[@]}" 2>/dev/null || true)"
+hits="$(diagnostic_matches '' 0 -nHoIE '([A-Za-z]:[/\\]|/[A-Za-z]/)Users[/\\][A-Za-z0-9._-]+' -- "${FILES[@]}")"
 [ -z "$hits" ] || report "Personal Windows profile path (R61) — use <repo> or C:\\dev\\EasySynQ:" $hits
 
 # Development-host observations age badly and can disclose an operator's platform, installed tools,
 # or local constraints. Historical plans should name a generic development environment instead.
-hits="$(grep -nHoIE '\b(this|current) (Linux |Windows |native-Windows )?(box|machine|workstation)\b|\bowner.?s (primary|native|development) (box|machine|workstation)\b|\bthis live (install|box)\b|ORG_EXAMPLE dogfood|populated ORG_EXAMPLE|\bactual users\b' -- "${FILES[@]}" 2>/dev/null || true)"
+hits="$(diagnostic_matches '' 0 -nHoIE '\b(this|current) (Linux |Windows |native-Windows )?(box|machine|workstation)\b|\bowner.?s (primary|native|development) (box|machine|workstation)\b|\bthis live (install|box)\b|ORG_EXAMPLE dogfood|populated ORG_EXAMPLE|\bactual users\b' -- "${FILES[@]}")"
 [ -z "$hits" ] || report "Installation/workstation-specific prose (R61) — generalize the environment:" $hits
 
 # --- email addresses -------------------------------------------------------------------------
 # Email-shaped fixtures must use IANA/RFC-reserved example domains. The one external no-reply
 # address below is commit-tool metadata, not an installation identity.
-hits="$(grep -nHoIE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -- "${FILES[@]}" 2>/dev/null \
-  | grep -viE -- '@(([^@]+\.)?example\.(com|net|org|local|test|invalid)|[a-z0-9.-]+\.(example|test|invalid)|easysynq\.local)$|:noreply@anthropic\.com$' || true)"
+hits="$(diagnostic_matches '@(([^@]+\.)?example\.(com|net|org|local|test|invalid)|[a-z0-9.-]+\.(example|test|invalid)|easysynq\.local)$|:noreply@anthropic\.com$' 1 \
+  -nHoIE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -- "${FILES[@]}")"
 [ -z "$hits" ] || report "Non-example email address (R61) — use an example.com address:" $hits
 
 # --- known site identifiers -----------------------------------------------------------------
@@ -62,7 +85,7 @@ hits="$(grep -nHoIE '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}' -- "${FILES
 # Catch the exact narrative markers from the incident so token substitution cannot make the same
 # semantic failure look clean again. This stays deliberately narrow; human review remains the
 # control for new prose shapes.
-hits="$(grep -nHoIE '\bthis is a site-specific deployment (design|plan|record)\b|\bevery fact below was verified on the machine\b|\bthe install is live; what follows is what remains\b|\bomitting the untracked site overlay\b|\bbackup chain [—-] proven with real archives\b|\bthe outstanding go-live security gates (are|remain) site state\b' -- "${FILES[@]}" 2>/dev/null || true)"
+hits="$(diagnostic_matches '' 0 -nHoIE '\bthis is a site-specific deployment (design|plan|record)\b|\bevery fact below was verified on the machine\b|\bthe install is live; what follows is what remains\b|\bomitting the untracked site overlay\b|\bbackup chain [—-] proven with real archives\b|\bthe outstanding go-live security gates (are|remain) site state\b' -- "${FILES[@]}")"
 [ -z "$hits" ] || report "Site-deployment dossier prose (R61) — retain only generalized lessons:" $hits
 
 # The repository owner is public GitHub metadata, but the same token used as a shell account or
@@ -74,6 +97,21 @@ if origin_url="$(git remote get-url origin 2>/dev/null)"; then
     | sed -nE 's#^(https://github\.com/|git@github\.com:)([A-Za-z0-9-]+)/EasySynQ(\.git)?$#\2#p' \
     | head -n 1)"
 fi
+scan_repo_owner() {
+  local path record line text retained display_path
+  while IFS= read -r -d '' path && IFS= read -r record; do
+    line="${record%%:*}"
+    text="${record#*:}"
+    retained="$(printf '%s\n' "$text" \
+      | sed -E 's#(https://github\.com/|git@github\.com:)[^/[:space:]]+/EasySynQ[^[:space:])>]*##g; s#`?[^/[:space:]`]+/EasySynQ`?##g; s#ghcr\.io/[^/[:space:]]+/easysynq/##g; s#(^|[^A-Za-z0-9_-])Owner:\*{0,2}[[:space:]]*[A-Za-z0-9_-]+#\1#g' \
+      | grep -iE -- "(^|[^A-Za-z0-9_-])${repo_owner}([^A-Za-z0-9_-]|$)" || true)"
+    if [ -n "$retained" ]; then
+      display_path="$path"
+      if [[ "$path" == *$'\n'* ]]; then printf -v display_path '%q' "$path"; fi
+      printf '%s:%s:<redacted-personal-identifier>\n' "$display_path" "$line"
+    fi
+  done < <(grep -nHIiFZ -- "$repo_owner" "${FILES[@]}" 2>/dev/null || true)
+}
 if [ -n "$repo_owner" ]; then
   # Keep this scan inside the shell toolchain already required by the gate. In particular, the
   # contracts job runs before language setup and Git Bash does not guarantee a global `python3`.
@@ -81,10 +119,7 @@ if [ -n "$repo_owner" ]; then
   # report only file + line so the diagnostic cannot republish the identity it rejected. The
   # project's own container packages are one such shape: `ghcr.io/<owner>/easysynq/<image>`, the
   # repository path in the lowercase form GHCR requires. Only that path segment is exempt.
-  hits="$(grep -nHIiF -- "$repo_owner" "${FILES[@]}" 2>/dev/null \
-    | sed -E 's#(https://github\.com/|git@github\.com:)[^/[:space:]]+/EasySynQ[^[:space:])>]*##g; s#`?[^/[:space:]`]+/EasySynQ`?##g; s#ghcr\.io/[^/[:space:]]+/easysynq/##g; s#(^|[^A-Za-z0-9_-])Owner:\*{0,2}[[:space:]]*[A-Za-z0-9_-]+#\1#g' \
-    | grep -iE -- "(^|[^A-Za-z0-9_-])${repo_owner}([^A-Za-z0-9_-]|$)" \
-    | sed -E 's#^([^:]+:[0-9]+):.*#\1:<redacted-personal-identifier>#' || true)"
+  hits="$(scan_repo_owner)"
   [ -z "$hits" ] || report "Repository-owner token used as a personal identifier (R61):" $hits
 fi
 
@@ -194,19 +229,18 @@ qualified_public_version_lines() {
 }
 
 scan_ipv4() {
-  local record path line text remainder token
+  local record path line text token display_path
   local pattern='\b([0-9]{1,3}\.){3}[0-9]{1,3}\b'
+  local sanctioned=':(10\.0\.0\.[0-9]{1,3}|10\.99\.99\.99|192\.0\.2\.[0-9]{1,3}|198\.51\.100\.[0-9]{1,3}|203\.0\.113\.[0-9]{1,3}|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|0\.0\.0\.0|255\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|8\.8\.8\.8|8\.8\.4\.4|7\.1\.5\.[12]|8\.2\.3\.[12]|3\.3\.1\.0|172\.16\.0\.0)$'
   local -A public_versions=()
   for path in "${FILES[@]}"; do
     if [[ "$path" == uv.lock || "$path" == */uv.lock ]]; then
       public_versions["$path"]=" $(qualified_public_version_lines "$path") "
     fi
   done
-  while IFS= read -r record; do
-    path="${record%%:*}"
-    remainder="${record#*:}"
-    line="${remainder%%:*}"
-    text="${remainder#*:}"
+  while IFS= read -r -d '' path && IFS= read -r record; do
+    line="${record%%:*}"
+    text="${record#*:}"
     if [[ "$path" == uv.lock || "$path" == */uv.lock ]]; then
       if [[ "${public_versions["$path"]:-}" == *" $line "* ]]; then
         text="$(printf '%s\n' "$text" | sed -E \
@@ -215,13 +249,15 @@ scan_ipv4() {
     fi
     text="$(printf '%s\n' "$text" | sed -E \
       -e 's#(https://files\.pythonhosted\.org/packages/[0-9A-Fa-f/]+/click_plugins-)1\.1\.1\.2((\.tar\.gz|-py2\.py3-none-any\.whl)([^A-Za-z0-9._-]|$))#\1<public-version>\2#g')"
+    display_path="$path"
+    if [[ "$path" == *$'\n'* ]]; then printf -v display_path '%q' "$path"; fi
     while IFS= read -r token; do
-      printf '%s:%s:%s\n' "$path" "$line" "$token"
+      [[ ":$token" =~ $sanctioned ]] && continue
+      printf '%s:%s:%s\n' "$display_path" "$line" "$token"
     done < <(printf '%s\n' "$text" | grep -oE -- "$pattern" || true)
-  done < <(grep -nHIE -- "$pattern" "${FILES[@]}" 2>/dev/null || true)
+  done < <(grep -nHIZE -- "$pattern" "${FILES[@]}" 2>/dev/null || true)
 }
-hits="$(scan_ipv4 \
-  | grep -vE -- ':(10\.0\.0\.[0-9]{1,3}|10\.99\.99\.99|192\.0\.2\.[0-9]{1,3}|198\.51\.100\.[0-9]{1,3}|203\.0\.113\.[0-9]{1,3}|127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|0\.0\.0\.0|255\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|8\.8\.8\.8|8\.8\.4\.4|7\.1\.5\.[12]|8\.2\.3\.[12]|3\.3\.1\.0|172\.16\.0\.0)$' || true)"
+hits="$(scan_ipv4)"
 [ -z "$hits" ] || report "IPv4 address outside the sanctioned documentation/placeholder set (R61):" $hits
 
 # --- IPv6 addresses --------------------------------------------------------------------------
@@ -582,7 +618,7 @@ mask_leading_slice_spans() {
 }
 
 scan_leading_ipv6() {
-  local record path line text remainder rest prefix suffix token core left right offset
+  local record path line text display_path rest prefix suffix token core left right offset
   local candidate='::[0-9A-Fa-f:.]+'
   local hex='^::[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6}$'
   local mapped='^::[Ff]{4}:([0-9]{1,3}\.){3}[0-9]{1,3}$'
@@ -590,11 +626,11 @@ scan_leading_ipv6() {
   local mixed="^::([0-9A-Fa-f]{1,4}:){0,5}${octet}(\.${octet}){3}$"
   local continuation='^[A-Za-z0-9_.:]$'
   local trailing_periods='^(.*[^.])\.+$'
-  while IFS= read -r record; do
-    path="${record%%:*}"
-    remainder="${record#*:}"
-    line="${remainder%%:*}"
-    text="${remainder#*:}"
+  while IFS= read -r -d '' path && IFS= read -r record; do
+    line="${record%%:*}"
+    text="${record#*:}"
+    display_path="$path"
+    if [[ "$path" == *$'\n'* ]]; then printf -v display_path '%q' "$path"; fi
     rest="$(mask_leading_slice_spans "$text")"
     while [[ "$rest" =~ $candidate ]]; do
       token="${BASH_REMATCH[0]}"
@@ -615,14 +651,14 @@ scan_leading_ipv6() {
       [[ "$token" =~ $mapped ]] && continue
       # Other leading mixed spellings require canonical octets and retain the full IPv6 token.
       if [[ "$token" =~ $hex && "$token" != '::1' || "$token" =~ $mixed ]]; then
-        printf '%s:%s:%s\n' "$path" "$line" "$token"
+        printf '%s:%s:%s\n' "$display_path" "$line" "$token"
       fi
     done
-  done < <(grep -nHIE -- '::' "${FILES[@]}" 2>/dev/null || true)
+  done < <(grep -nHIZE -- '::' "${FILES[@]}" 2>/dev/null || true)
 }
 hits="$(
-  grep -nHoIE '\b([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b|\b([0-9A-Fa-f]{1,4}:){1,7}:([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6}\b)?' -- "${FILES[@]}" 2>/dev/null \
-    | grep -viE -- ':2001:db8(:|$)|:0:0:0:0:0:0:0:1$' || true
+  diagnostic_matches ':2001:db8(:|$)|:0:0:0:0:0:0:0:1$' 1 \
+    -nHoIE '\b([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}\b|\b([0-9A-Fa-f]{1,4}:){1,7}:([0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6}\b)?' -- "${FILES[@]}"
   scan_leading_ipv6
 )"
 [ -z "$hits" ] || report "IPv6 address outside the RFC 3849 documentation prefix (R61):" $hits
@@ -634,22 +670,22 @@ hits="$(
 # from-address token) and errors.easysynq.local (an RFC-7807 problem-type URN namespace) ·
 # settings.local (a gitignore FILENAME token, not a host) · test-smtp.local (the established
 # synthetic SMTP host in the integration tests, the 10.99.99.99 of hostnames).
-hits="$(grep -nHoIE '\b[a-zA-Z0-9][a-zA-Z0-9-]*(\.[a-zA-Z0-9][a-zA-Z0-9-]*)*\.local\b' -- "${FILES[@]}" 2>/dev/null \
-  | grep -viE -- ':([a-z0-9.-]+\.)?example\.local$|:([a-z0-9.-]+\.)?contoso\.local$|:(errors\.)?easysynq\.local$|:settings\.local$|:test-smtp\.local$' || true)"
+hits="$(diagnostic_matches ':([a-z0-9.-]+\.)?example\.local$|:([a-z0-9.-]+\.)?contoso\.local$|:(errors\.)?easysynq\.local$|:settings\.local$|:test-smtp\.local$' 1 \
+  -nHoIE '\b[a-zA-Z0-9][a-zA-Z0-9-]*(\.[a-zA-Z0-9][a-zA-Z0-9-]*)*\.local\b' -- "${FILES[@]}")"
 [ -z "$hits" ] || report "Non-example .local hostname (R61) — use example.local:" $hits
 
 # --- MAC addresses other than the placeholder ------------------------------------------------
-hits="$(grep -nHoiIE '\b([0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b' -- "${FILES[@]}" 2>/dev/null \
-  | grep -viE -- '00[:-]15[:-]5D[:-]00[:-]00[:-]01$' || true)"
+hits="$(diagnostic_matches '00[:-]15[:-]5D[:-]00[:-]00[:-]01$' 1 \
+  -nHoiIE '\b([0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b' -- "${FILES[@]}")"
 [ -z "$hits" ] || report "MAC address (R61) — use 00:15:5D:00:00:01 as the placeholder:" $hits
 
 # --- certificate / key fingerprints ----------------------------------------------------------
-hits="$(grep -nHoIE '\b([0-9A-Fa-f]{2}:){15,}[0-9A-Fa-f]{2}\b' -- "${FILES[@]}" 2>/dev/null || true)"
+hits="$(diagnostic_matches '' 0 -nHoIE '\b([0-9A-Fa-f]{2}:){15,}[0-9A-Fa-f]{2}\b' -- "${FILES[@]}")"
 [ -z "$hits" ] || report "Certificate/key fingerprint (R61) — per-install, do not commit:" $hits
 
 # OpenSSH-style fingerprints: `SHA256:` + 43 unpadded base64 chars. Case-sensitive on purpose —
 # docker/OCI image digests are lowercase `sha256:<hex>` and must not match.
-hits="$(grep -nHoE '\bSHA256:[A-Za-z0-9+/]{43}' -- "${FILES[@]}" 2>/dev/null || true)"
+hits="$(diagnostic_matches '' 0 -nHoE '\bSHA256:[A-Za-z0-9+/]{43}' -- "${FILES[@]}")"
 [ -z "$hits" ] || report "OpenSSH SHA256 key fingerprint (R61) — per-install, do not commit:" $hits
 
 if [ "$fail" -ne 0 ]; then

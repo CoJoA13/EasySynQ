@@ -6,6 +6,43 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Scanner decisions and source lines are independent of filenames (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+Tracked filenames and grep locations now travel through NUL-delimited records. Colons, quotes,
+backslashes and embedded newlines cannot become source text or nonexistent display-name operands.
+The exact dash filename is passed as an equivalent file operand. Default scanner exclusion and
+explicit selection retain their existing behavior; raw paths remain package-cache keys.
+
+Existing allowance expressions now inspect matched source content before the diagnostic path is
+attached. A filename cannot grant an allowance or create a repository-owner identity hit. Owner
+metadata checks preserve their original expressions and emit only a physical location with the
+existing redacted marker. Newline-bearing paths are escaped into one diagnostic line. The existing
+reporter still splits whitespace in displayed filenames; this change does not promise exact public
+rendering of those path bytes. Address grammar, candidate advancement, slice masking, package
+qualification and binary behavior are preserved. No runtime executable or file exemption is added.
+
+The independently reviewed test-only regression recorded **153 passes and 262 intended failures**
+in 8.937 seconds against the unchanged scanner. The 47 fixture repositories make 94 gate calls
+and add 415 assertions, covering default and explicit selection, physical EOF and source lines,
+multiple records, every direct matcher, qualified locks, content-only allowances, redaction,
+constrained PATH, exact scanner selection and benign controls. Removing the new block restores
+all prior harness bytes and outcomes.
+
+The expanded harness passed **2159 assertions in 66.241 seconds**, including all 1744 earlier
+assertions and all 415 new assertions. All eight explicit locks passed. The complete tracked tree
+scanned clean in **14.407 seconds**, below the unchanged 30-second limit, including the deliberate
+per-record owner normalization cost. Separate scanner/harness syntax, authority and working/index
+whitespace checks passed with identical before/after source identities. Independent plan, test,
+classified regression and implementation reviews approved the change. Final documentation guards
+and complete final review remain required before publication, followed by current-head CI.
+
+Independent exact comparisons support reuse of the ten prior progress results, raw UTF-8 helper
+output and archived long-root proof for unchanged code paths and workloads. Those are historical
+measurements and do not establish the new owner cost; the full-tree duration above is fresh.
+Native Git Bash and ShellCheck remain unverified. The existing physical-line and bounded-source
+limitations still apply, and R61 continues to require human review.
+
 ## Leading mixed addresses retain their complete IPv6 diagnostic (2026-10-12 UTC)
 
 Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
