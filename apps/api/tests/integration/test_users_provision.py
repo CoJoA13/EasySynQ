@@ -421,7 +421,7 @@ async def _invite_recovery_user(
     return user_id, role_id
 
 
-@pytest.mark.parametrize("provider_status", [401, 403, 404, 422, 429, 503])
+@pytest.mark.parametrize("provider_status", [401, 403, 404, 429, 503])
 async def test_create_provider_non_validation_error_returns_availability_problem(
     provider_status: int,
     app_client: httpx.AsyncClient,
@@ -451,6 +451,45 @@ async def test_create_provider_non_validation_error_returns_availability_problem
     assert await _app_user_count() == before
     assert len(calls["created"]) == 1
     assert calls["password"] == []
+
+
+async def test_create_provider_422_returns_validation_problem(
+    app_client: httpx.AsyncClient,
+    token_factory: Callable[..., str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A real provider422 rejects before application roles, user or credential writes."""
+    explanation = "Profile extension rejected the submitted field. " + "x" * 220
+    calls = _install_kc(
+        monkeypatch,
+        create_status=422,
+        create_body={"errorMessage": explanation, "extra": "unused private provider body"},
+    )
+    headers = await _admin(token_factory)
+    role_id = await _role_id("Author")
+    async with get_sessionmaker()() as session:
+        before_users = set((await session.scalars(select(AppUser.id))).all())
+        before_roles = set((await session.scalars(select(RoleAssignment.id))).all())
+        before_audits = set((await session.scalars(select(AuditEvent.id))).all())
+
+    response = await app_client.post(
+        "/api/v1/users/provision",
+        headers=headers,
+        json={"username": _sub("profile-validation"), "role_ids": [str(role_id)]},
+    )
+
+    assert response.status_code == 422, response.text
+    problem = response.json()
+    assert problem["code"] == "validation_error"
+    assert problem["detail"] == explanation[:200]
+    assert "unused private provider body" not in response.text
+    assert "temporary_password" not in problem
+    assert len(calls["created"]) == 1
+    assert calls["password"] == []
+    async with get_sessionmaker()() as session:
+        assert set((await session.scalars(select(AppUser.id))).all()) == before_users
+        assert set((await session.scalars(select(RoleAssignment.id))).all()) == before_roles
+        assert set((await session.scalars(select(AuditEvent.id))).all()) == before_audits
 
 
 async def test_missing_subject_reset_returns_documented_recovery(

@@ -6,6 +6,38 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## First-administrator recovery retains provider validation semantics (2026-10-12 UTC)
+
+Follow-up candidate for [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642).
+Provider user creation now classifies HTTP 400 and 422 as definitive profile-input rejection.
+First-administrator setup receives its existing rejection signal, rechecks the exact username
+and releases only the same still-unowned claim after confirmed absence. A found identity or
+failed reread retains the claim. Administrative 401/403 failures keep availability semantics;
+conflict handling, password-reset recovery and other provider operations retain their behavior.
+The historical issue plan is preserved with a dated amendment to its earlier 400-only rule.
+
+The tests exercise the actual provider client through HTTP mocks, ordinary provisioning and
+the real setup API with disposable PostgreSQL. The unchanged-code baseline produced exactly
+**5 intended failures and 24 passing controls**. One failure proved that the old classifier
+skipped the required lookup after POST even though its 502 status matched the outage expectation.
+Independent reviews accepted the plan, actual tests, classified regression and narrow
+implementation: one executable predicate plus explanatory comments and a docstring.
+
+Fresh affected verification passed **131 provider/identity unit cases** and **42 selected
+provisioning/setup integration cases**, with no skips or failures. The integration cohort covers
+400/422 release and corrected-username retry, found/outage retention, 401/403 claim and lock
+handling, redaction, audits, conflict recovery, serialization and post-commit controls.
+Affected Ruff lint/format, mypy across 485 source files, authority and both whitespace guards
+passed. The complete tracked tree scanned clean in **13.622 seconds**, below the unchanged
+30-second limit. Source identities stayed identical before and after all nine checks.
+
+Prior contract generation, browser build and **95 Chromium/19 legibility** results from the
+preceding integration remain evidence for unchanged inputs. The accepted scanner and harness
+also remain unchanged; their behavioral and progress proofs were not repeated. This follow-up
+does not establish live-provider, replacement sign-in or built-image acceptance. Final
+documentation guards, complete independent final review, normal hooks and fresh current-head
+CI remain required before publication or merge as applicable.
+
 ## Identity recovery contracts verified with the accepted parallel changes (2026-10-12 UTC)
 
 Integration candidate for [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642), following

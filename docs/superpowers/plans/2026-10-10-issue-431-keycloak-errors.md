@@ -131,3 +131,30 @@ New problem bodies contain no provider diagnostics, password, bearer, subject, o
 - A reset404 can also arise from wrong realm/path configuration. Fixed copy requires realm verification before replacement; no automatic mutation follows a provider404.
 - The CreateUserModal auto-refetch trigger remains `keycloak_unavailable`; missing-subject postcommit409 needs the documented reload action. If review requires automatic visibility instead, ask coordinator to allocate a minimal UI change and its regression test rather than edit #430's UI lane concurrently.
 - Shared client setup callers catch the missing exception through its unavailable base and retain setup-specific recovery semantics. This plan does not expand ordinary replacement-account recovery into durable first-admin claim recovery.
+
+## Dated correction — preserve create-time validation rejection (2026-10-12 UTC)
+
+A later review of PR #642 found that this plan's 400-only create rule and its explicit
+422-as-unavailable test expectations conflict with the owner-approved first-administrator
+[hardening design](../specs/2026-08-16-s-first-admin-review-hardening-design.md#5-definitive-rejection-and-claim-release),
+sections 2 and 5. Those earlier plan entries remain historical evidence.
+This amendment supersedes only their classification of provider create status 422.
+
+Account creation treats provider 400 and 422 as `KeycloakRejected`, using the existing bounded
+input explanation. Create 409 retains conflict classification. Administrative failures such as
+401/403, endpoint and timeout responses, throttling, server failures and unexpected success or
+redirect statuses retain `KeycloakUnavailable`; this does not restore a blanket 4xx rule.
+Password-reset missing-subject behavior, claimed-profile reconciliation, token/lookup handling,
+application authorization, contract schemas and manual recovery procedures remain unchanged.
+
+The existing setup rejection path must perform its final exact-username read and release only
+the same still-unowned claim after definitive absence. A found identity or failed read retains
+the claim. Public setup errors remain redacted, with no new credential issuance or linked application
+state created by the rejected attempt. A corrected username can proceed after safe release.
+
+Test-first proof uses the real provider client with an HTTP mock at its network boundary, plus
+ordinary provisioning and setup API/PostgreSQL cases. The two historical test matrices are
+corrected only for status 422; other status controls remain. The focused failing run, actual
+implementation, affected-suite verification and complete final change each require independent
+review before publication. Earlier browser, contract-generation and scanner proofs are reused
+only where their source inputs remain identical.

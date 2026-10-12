@@ -333,7 +333,7 @@ async def _provision_user(
             )
             raise ProblemException(status=409, code=code, title=title) from exc
         except KeycloakRejected as exc:
-            # Provider400 rejects submitted profile fields; other statuses need IT recovery.
+            # Provider400/422 rejects submitted profile fields; other statuses need IT recovery.
             raise ProblemException(
                 status=422,
                 code="validation_error",

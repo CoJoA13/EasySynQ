@@ -80,7 +80,7 @@ class KeycloakConflict(KeycloakProvisioningError):
 class KeycloakRejected(KeycloakProvisioningError):
     """Keycloak refused profile input that cannot succeed unchanged.
 
-    Create uses this for a 400; exact claimed-profile reconciliation also uses it
+    Create uses this for 400/422; exact claimed-profile reconciliation also uses it
     for the provider's 400/409 validation responses. Distinct from ``KeycloakUnavailable``: the
     dependency is reachable. ``detail`` is always bounded and sanitised, never a raw body.
     """
@@ -392,8 +392,8 @@ class KeycloakProvisioningClient:
             raise KeycloakUnavailable(f"Keycloak user create failed: {exc}") from exc
         if response.status_code == 409:
             raise await self._classify_create_conflict(username, response)
-        if response.status_code == 400:
-            # Only attribute validation is submitted-input rejection. Admin-access failures,
+        if response.status_code in (400, 422):
+            # Supported profile-validation statuses reject submitted input. Admin-access failures,
             # throttling and unexpected endpoint responses need dependency/configuration repair.
             # Keep the provider's input explanation bounded through `_bounded_message`.
             raise KeycloakRejected(_bounded_message(response))
