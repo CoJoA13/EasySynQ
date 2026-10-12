@@ -134,6 +134,17 @@ run_progress_case() {
       long_step="${padding// /x}"
       payload="values[$first + $long_step + (((1)))]; $malformed_mapped; unmatched[ endpoint='$second'"
       ;;
+    terminal-periods)
+      long_step="${padding// /.}"
+      payload="values[$numeric]; note=\"$first${long_step}\"; endpoint=$second"
+      assert_exit 'progress terminal-periods retains 65536 periods' 65536 "${#long_step}"
+      case "$long_step" in
+        *[!.]*) bad 'progress terminal-periods contains only ASCII periods' ;;
+        *) ok 'progress terminal-periods contains only ASCII periods' ;;
+      esac
+      assert_exit 'progress terminal-periods retains its exact file byte length' \
+        65580 "$((${#payload} + 1))"
+      ;;
     *) printf 'Unknown progress case: %s\n' "$name" >&2; return 2 ;;
   esac
 
@@ -156,6 +167,9 @@ run_progress_case() {
     assert_contains "progress $name reports its source line" "$RUN_OUTPUT" 'probe.txt:1:'
     assert_not_contains "progress $name has no clean verdict" "$RUN_OUTPUT" 'check-no-site-data: clean'
     case "$name" in
+      terminal-periods)
+        assert_contains "progress $name preserves its first address" "$RUN_OUTPUT" "probe.txt:1:$first"$'\n'
+        ;;
       long-step)
         assert_contains "progress long-step preserves the neighbor" "$RUN_OUTPUT" "probe.txt:1:$second"
         assert_not_contains "progress long-step masks only its approved step" "$RUN_OUTPUT" "probe.txt:1:$first"
@@ -163,18 +177,21 @@ run_progress_case() {
       *) assert_contains "progress $name preserves its first address" "$RUN_OUTPUT" "probe.txt:1:$first" ;;
     esac
     case "$name" in
+      terminal-periods)
+        assert_contains "progress $name preserves its last address" "$RUN_OUTPUT" "probe.txt:1:$second"$'\n'
+        ;;
       long-sparse|unicode-sparse|malformed-dense|malformed-long-step|literal-dense)
         assert_contains "progress $name preserves its last address" "$RUN_OUTPUT" "probe.txt:1:$second"
         ;;
     esac
   fi
   case "$name" in
-    small-control|long-sparse|unicode-sparse|all-slices|literal-dense)
+    small-control|long-sparse|unicode-sparse|all-slices|literal-dense|terminal-periods)
       assert_not_contains "progress $name has no numeric-slice diagnostic" "$RUN_OUTPUT" "probe.txt:1:$numeric"
       ;;
   esac
   case "$name" in
-    small-control|long-sparse|unicode-sparse)
+    small-control|long-sparse|unicode-sparse|terminal-periods)
       assert_not_contains "progress $name omits sentence periods" "$RUN_OUTPUT" "probe.txt:1:${first}."
       ;;
   esac
@@ -746,7 +763,13 @@ for content in "${boundary_cases[@]}"; do
   label="leading-boundary-$case_number"
   new_text_case "$label" "$content"
   run_gate "$repo" "$PATH"
-  assert_not_contains "$label has no shortened IPv6 match" "$RUN_OUTPUT" "$ipv6_rule"
+  if [ "$case_number" -eq 4 ]; then
+    expect_rejection "$label" "$ipv6_rule"
+    assert_contains "$label keeps the complete dot-free token" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"$'\n'
+    assert_not_contains "$label omits terminal prose periods" "$RUN_OUTPUT" "probe.txt:1:${leading_hex}."
+  else
+    assert_not_contains "$label has no shortened IPv6 match" "$RUN_OUTPUT" "$ipv6_rule"
+  fi
 done
 
 new_text_case "structural-ipv6-controls" 'bind=:: loopback=::1 documentation=2001:db8::1 canonical=0:0:0:0:0:0:0:1 time=12:30 ratio=2:1 mac=00:15:5D:00:00:01'
@@ -757,7 +780,7 @@ new_text_case "existing-full-ipv6" "$full_ipv6"
 run_gate "$repo" "$PATH"
 expect_rejection "existing-full-ipv6" "$ipv6_rule"
 
-# One terminal prose period is punctuation; internal/repeated dots remain part of the candidate.
+# Terminal prose periods normalize only after complete-core and lexical-boundary checks.
 case_number=0
 for suffix in '.' '. ' $'.\t'; do
   for prefix in '' "values[${slice_prefix}2 + 1]; " "values[${slice_prefix}f()]; "; do
@@ -775,6 +798,102 @@ run_gate "$repo" "$PATH"
 expect_rejection "sentence-two-neighbors" "$ipv6_rule"
 assert_contains "sentence first neighbor survives" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"
 assert_contains "sentence second neighbor survives" "$RUN_OUTPUT" "probe.txt:1:$mapped_hex"
+
+# Focused punctuation cases are self-contained for unchanged-source red characterization.
+run_punctuation_cases() {
+  local case_index label content punctuation_loopback punctuation_nonloopback
+  local -a punctuation_labels=(
+    punctuation-quoted-period punctuation-ellipsis punctuation-quoted-ellipsis
+    punctuation-parenthesis punctuation-single-quote punctuation-uri-bracket
+    punctuation-backtick punctuation-ellipsis-space punctuation-ellipsis-tab
+  )
+  local -a punctuation_cases=(
+    "note=\"The endpoint is $leading_hex.\""
+    "The endpoint is ${leading_hex}..."
+    "note=\"The endpoint is ${leading_hex}...\""
+    "The endpoint is (${leading_hex}.)"
+    "note='The endpoint is ${leading_hex}.'"
+    "endpoint=http://[${leading_hex}.]:443"
+    '`The endpoint is '"${leading_hex}"'...`'
+    "${leading_hex}... "
+    "${leading_hex}..."$'\t'
+  )
+  for ((case_index=0; case_index<${#punctuation_cases[@]}; case_index++)); do
+    label="${punctuation_labels[case_index]}"
+    new_text_case "$label" "${punctuation_cases[case_index]}"
+    run_gate "$repo" "$PATH"
+    expect_rejection "$label" "$ipv6_rule"
+    assert_contains "$label keeps the complete dot-free token" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"$'\n'
+    assert_not_contains "$label omits terminal prose periods" "$RUN_OUTPUT" "probe.txt:1:${leading_hex}."
+  done
+
+  punctuation_loopback="$(printf '%s%s' "$slice_prefix" '1')"
+  new_text_case "punctuation-exact-loopback" "note=\"${punctuation_loopback}...\""
+  run_gate "$repo" "$PATH"
+  expect_clean "punctuation-exact-loopback"
+  assert_not_contains "punctuation exact loopback has no IPv6 diagnostic" "$RUN_OUTPUT" "$ipv6_rule"
+  punctuation_nonloopback="$(printf '%s%s' "$slice_prefix" '1abc')"
+  new_text_case "punctuation-one-prefix" "note=\"${punctuation_nonloopback}...\""
+  run_gate "$repo" "$PATH"
+  expect_rejection "punctuation-one-prefix" "$ipv6_rule"
+  assert_contains "punctuation nonloopback retains its entire token" "$RUN_OUTPUT" \
+    "probe.txt:1:$punctuation_nonloopback"$'\n'
+  assert_not_contains "punctuation nonloopback omits terminal periods" "$RUN_OUTPUT" \
+    "probe.txt:1:${punctuation_nonloopback}."
+
+  new_text_case "punctuation-two-neighbors" \
+    "values[$leading_numeric]; note=\"${leading_hex}...\"; other=(${prose_second}.)"
+  run_gate "$repo" "$PATH"
+  expect_rejection "punctuation-two-neighbors" "$ipv6_rule"
+  assert_contains "punctuation first complete neighbor survives" "$RUN_OUTPUT" "probe.txt:1:$leading_hex"$'\n'
+  assert_contains "punctuation second complete neighbor survives" "$RUN_OUTPUT" "probe.txt:1:$prose_second"$'\n'
+  assert_not_contains "punctuation first neighbor omits periods" "$RUN_OUTPUT" "probe.txt:1:${leading_hex}."
+  assert_not_contains "punctuation second neighbor omits periods" "$RUN_OUTPUT" "probe.txt:1:${prose_second}."
+  assert_not_contains "punctuation neighbors keep the genuine slice masked" "$RUN_OUTPUT" "probe.txt:1:$leading_numeric"
+
+  case_index=0
+  for content in "note=\"${mapped_doc}...\"" "endpoint=(${mapped_doc_upper}...)"; do
+    case_index=$((case_index + 1))
+    label="punctuation-mapped-documentation-$case_index"
+    new_text_case "$label" "$content"
+    run_gate "$repo" "$PATH"
+    expect_clean "$label"
+    assert_not_contains "$label has no partial IPv6 match" "$RUN_OUTPUT" "$ipv6_rule"
+  done
+  case_index=0
+  for content in "note=\"${mapped_unsafe}...\"" "endpoint=(${mapped_unsafe}...)"; do
+    case_index=$((case_index + 1))
+    label="punctuation-mapped-unsafe-$case_index"
+    new_text_case "$label" "$content"
+    run_gate "$repo" "$PATH"
+    expect_rejection "$label" "$ipv4_rule"
+    assert_contains "$label preserves the exact unsafe IPv4 token" "$RUN_OUTPUT" "probe.txt:1:$unsafe_ipv4"$'\n'
+    assert_not_contains "$label has no partial IPv6 match" "$RUN_OUTPUT" "$ipv6_rule"
+  done
+
+  local -a punctuation_malformed=(
+    "$(printf '%s%s:%s.%s' "$slice_prefix" 'ffff' '192' '0')"
+    "$(printf '%s%s:%s..%s.%s.%s' "$slice_prefix" 'ffff' '192' '0' '2' '1')"
+    "${mapped_doc}.1" "${leading_hex}.1" "${leading_hex}e"
+  )
+  case_index=0
+  for content in "${punctuation_malformed[@]}"; do
+    case_index=$((case_index + 1))
+    label="punctuation-malformed-$case_index"
+    new_text_case "$label" "note=\"${content}...\""
+    run_gate "$repo" "$PATH"
+    assert_not_contains "$label never extracts a shorter IPv6 prefix" "$RUN_OUTPUT" "$ipv6_rule"
+  done
+  case_index=0
+  for content in "prefix${leading_hex}..." "${leading_hex}...x" "${leading_hex}..._"; do
+    case_index=$((case_index + 1))
+    label="punctuation-continuation-$case_index"
+    new_text_case "$label" "note=\"$content\""
+    run_gate "$repo" "$PATH"
+    assert_not_contains "$label denies a shortened IPv6 token" "$RUN_OUTPUT" "$ipv6_rule"
+  done
+}
+run_punctuation_cases
 
 # Dotted mapped endpoints are whole tokens; the IPv4 policy decides sanctioned and unsafe endpoints.
 case_number=0

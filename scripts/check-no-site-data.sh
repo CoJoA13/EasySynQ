@@ -587,6 +587,7 @@ scan_leading_ipv6() {
   local hex='^::[0-9A-Fa-f]{1,4}(:[0-9A-Fa-f]{1,4}){0,6}$'
   local mapped='^::[Ff]{4}:([0-9]{1,3}\.){3}[0-9]{1,3}$'
   local continuation='^[A-Za-z0-9_.:]$'
+  local trailing_periods='^(.*[^.])\.+$'
   while IFS= read -r record; do
     path="${record%%:*}"
     remainder="${record#*:}"
@@ -602,9 +603,9 @@ scan_leading_ipv6() {
       right="${suffix:0:1}"
       rest="$suffix"
       [[ "$left" =~ $continuation || "$right" =~ $continuation ]] && continue
-      # Normalize exactly one sentence period only when the entire remainder is a known shape.
-      if [[ "$token" == *'.' && "$token" != *'..' && ( -z "$right" || "$right" == ' ' || "$right" == $'\t' ) ]]; then
-        core="${token%.}"
+      # Normalize trailing prose periods only when their full core is a known shape.
+      if [[ "$token" == *'.' && "$token" =~ $trailing_periods ]]; then
+        core="${BASH_REMATCH[1]}"
         if [[ "$core" =~ $hex || "$core" =~ $mapped ]]; then token="$core"; fi
       fi
       # The full dotted mapped token belongs to the IPv4 policy, including documentation octets.

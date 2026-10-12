@@ -184,3 +184,32 @@ Required fresh evidence is the expanded regression suite, all eight existing bou
 cases, the new 2,048-group literal-density case, the exact 65,536-character call-root probe,
 eight selected locks and the full tracked tree under 30 seconds. Independent implementation and
 final evidence reviews, normal commit hooks and current-head CI remain publication/merge gates.
+
+## Terminal punctuation amendment (2026-10-12 UTC)
+
+A subsequent review reproduced missed addresses when a quoted sentence ends with a period and
+when prose uses an ellipsis. This amendment supersedes the earlier exact-one-period rule and
+its repeated-terminal-dot expectation; the earlier plan and execution records remain historical.
+
+After the existing lexical continuation checks, strip a complete trailing run of ASCII periods
+in one anchored operation only when the entire remaining core matches the existing leading-hex
+or mapped-dotted shape. Quotation marks, closing delimiters and other accepted punctuation use
+the same boundary policy as an unpunctuated address. Internal dots, extra mapped octets, overlong
+hex groups and identifier/colon continuation must never yield a shorter matching prefix.
+Mapped endpoints remain subject to the unchanged IPv4 rule; exact loopback exclusion is unchanged.
+The scan cursor advances by the original candidate length, including all trailing periods.
+
+The existing fourth leading-boundary fixture retains its label and runtime bytes but now requires
+rejection of its complete dot-free address. Every other existing outcome and workload remains
+unchanged. New exact-token controls cover quoted/parenthesized/URI punctuation, multiple neighbors,
+malformed and continued candidates, mapped ownership, and exact loopback versus a nonloopback
+address beginning with the same digit. One new public probe uses 65,536 terminal periods inside
+a quoted endpoint after a genuine source slice, followed by another endpoint. It retains the fixed
+five-second deadline and independently asserts both complete addresses and the masked slice.
+
+The slice helper, original candidate grammar, outer boundaries and other scanner rules remain
+unchanged. Reuse of the earlier helper progress, raw UTF-8 output and long-root evidence requires
+independent byte-identity review; those timings are not new measurements of the amended scanner.
+Fresh evidence must cover the expanded harness, new dot-run probe, eight locks, full tracked tree
+under 30 seconds, syntax, authority and diff guards. Independent plan, test, implementation and
+final reviews, normal hooks and fresh current-head CI remain publication and merge requirements.

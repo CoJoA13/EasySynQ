@@ -6,6 +6,40 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Leading addresses retain detection before prose punctuation (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The leading-address consumer removes a complete terminal run of sentence periods after its
+existing lexical boundary checks, including before quotes and closing delimiters. Only a whole
+core matching the existing hex or mapped grammar is normalized. Internal dots, extra mapped
+components, overlong groups and identifier continuations cannot become shortened matches.
+Mapped endpoints retain IPv4 ownership, exact loopback remains excluded, and the cursor advances
+by the original candidate length. Slice masking and all other scanner rules are unchanged.
+
+The original two-period fixture retains its payload and explicitly changes to exact-address
+rejection. A dated amendment in the original plan supersedes the earlier single-period contract;
+all historical text and other prior outcomes remain preserved. Focused regression evidence on
+the unchanged scanner recorded **46 passes and 61 intended failures** in 2.893 seconds. Controls
+for malformed tokens, mapped addresses, lexical continuations and exact loopback passed.
+
+The final expanded harness passed **1540 assertions** in **37.016 seconds**. The new public
+progress probe passed all **11 assertions in 2.635 seconds**, within its unchanged five-second
+limit. Its exact 65,580-byte payload includes 65,536 periods, one genuine numeric slice and two
+independently checked complete endpoint diagnostics. A reviewed builtin character check replaced
+a costly test-only string copy without changing that payload, assertion count or deadline.
+All eight explicit locks passed. The complete tracked tree scanned clean in **12.171 seconds**,
+below the fixed 30-second limit. Syntax, authority and working/index whitespace checks passed;
+before/after source identities matched.
+
+Independent reviews confirmed the helper and all previous progress workloads unchanged. Their
+nine prior progress results, exact raw UTF-8 helper output and archived long-root proof are reused
+for those identical paths; they were not newly timed on this punctuation scanner. The new probe
+and full-tree duration above are fresh measurements. Earlier comparison timings remain historical.
+Independent plan, test and implementation reviews approved this correction. Final documentation
+guards and complete final review remain required before publication, followed by current-head CI.
+Native Git Bash and ShellCheck remain unverified. The physical-line and bounded-source limitations
+recorded below still apply, and R61 continues to require human review.
+
 ## Slice masking preserves literal address text (2026-10-12 UTC)
 
 Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
