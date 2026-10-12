@@ -72,6 +72,16 @@ EASYSYNQ_COMPOSE=(
 )
 ```
 
+If the running deployment includes `infra/compose/compose.site.yml`, append its explicit
+`-f` flag to this array before using the commands below:
+
+```bash
+EASYSYNQ_COMPOSE+=(-f infra/compose/compose.site.yml)
+```
+
+Follow [Local installation artifacts](../runbooks/install-online.md#local-installation-artifacts)
+for the supported path and inclusion rules.
+
 Use `"${EASYSYNQ_COMPOSE[@]}" <command>` in the examples below. The host helper
 `./scripts/easysynq` intentionally dispatches supported one-off administration jobs.
 

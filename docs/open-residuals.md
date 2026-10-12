@@ -831,24 +831,6 @@ against the current output. `formatTimestamp`'s missing `timeZone` should be fix
 proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02
 
-## RES-SITE-ARTIFACT-GITIGNORE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #423](https://github.com/CoJoA13/EasySynQ/issues/423) item 3, filed
-2026-08-03; items 1 and 2 were mooted when the deployment record they corrected was removed. Verified
-against `3d8613a` on 2026-09-22.
-Reason: The install runbooks tell operators to create site-specific Compose overlays and to export the
-installation root CA as `easysynq-root-ca.crt` inside the working tree, but `.gitignore` covers
-neither. A routine `git add -A` on an operator checkout can therefore stage site data that R61
-forbids in the repository.
-Closure contract: First name one supported location and filename for a site overlay in the install
-runbooks (today they show an inline override fragment without prescribing a path, so no ignore rule
-can be targeted safely, and a wildcard broad enough to cover every valid Compose filename would hide
-tracked files). Then ignore exactly that path and the exported root CA, and prove both with
-`git check-ignore` plus a check that every tracked `infra/compose/compose.*.yml` stays tracked.
-Last reviewed: 2026-09-22
-
 ## RES-UNBOUND-SCOPE-TEMPLATE-ROLES
 
 Status: OPEN
