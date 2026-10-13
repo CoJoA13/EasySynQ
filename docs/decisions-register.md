@@ -2334,9 +2334,11 @@ the timestamp behind it breaks silently under this change — no type error, no 
 register in the wrong order. Enumerating every `useOrgDate` consumer and proving none does that is a
 precondition of the convergence work, not a review comment on it.
 
-**Back-propagation:** `11-ui-ux-design-system.md` when its §3 rewrite lands (that document is
-separately known to be drifted — `RES-DOC11-TOKEN-DRIFT`), and every surface named by
-`RES-DATE-TIME-DISPLAY-CONVERGENCE`. `lib/time.ts` carries the rule at the source in both formatters.
+**Back-propagation:** [Doc 11 §3.1](11-ui-ux-design-system.md#31-typography) now records this display
+standard; its token reconciliation is recorded in
+[dated slice history](slice-history.md#doc-11-follows-implemented-design-tokens-2026-10-12-utc).
+Every surface named by `RES-DATE-TIME-DISPLAY-CONVERGENCE` still requires convergence.
+`lib/time.ts` carries the rule at the source in both formatters.
 
 Bumps the resolutions range **R1–R69 → R1–R70**.
 
