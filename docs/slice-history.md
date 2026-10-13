@@ -6,6 +6,37 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## Supported local installation artifacts (2026-10-12 UTC)
+
+Closes `RES-SITE-ARTIFACT-GITIGNORE` ([#423](https://github.com/CoJoA13/EasySynQ/issues/423),
+original item 3). The installation guidance now names `infra/compose/compose.site.yml` as the
+optional operator-local Compose overlay and root-level `easysynq-root-ca.crt` as the CA export.
+Two exact root-anchored rules prevent routine staging. Required Compose files, offline flags,
+socket restrictions and installer behavior are preserved; manual overlay use remains explicit.
+The runbooks, installation/administrator manuals and existing syslog example share this path.
+
+The public Git proof used nonexistent paths and created no installation artifacts. Both paths
+were unignored before their rules were added. Individual and combined checks now return status 0
+and identify exactly the root `.gitignore` rules:
+
+```text
+.gitignore:11:/infra/compose/compose.site.yml	infra/compose/compose.site.yml
+.gitignore:12:/easysynq-root-ca.crt	easysynq-root-ca.crt
+```
+
+Seven neighboring filename/extension/suffix/root-anchoring controls return status 1 with no
+output. All **eight** base and `compose.*.yml` files remain tracked, with exact baseline/index
+manifest equality and no ignore-rule match under `--no-index`. Neither local artifact is tracked.
+This proof protects the two documented paths; it does not permit site data in other filenames.
+
+Four affected documentation-content tests, the contributor-hosting contract, authority and
+whitespace checks passed. The final path's full tracked-tree site-data scan passed in **14.914
+seconds**. The content/hosting checks ran before the filename correction; inverse-byte comparison
+proved its only product changes were twelve path substitutions, preserving their tested meanings.
+The scanner and its policy were unchanged. No deployment, certificate export or runtime behavior
+was exercised or changed by this documentation correction.
+
+
 ## Doc 11 follows implemented design tokens (2026-10-12 UTC)
 
 Closes `RES-DOC11-TOKEN-DRIFT` ([#562](https://github.com/CoJoA13/EasySynQ/issues/562)).
