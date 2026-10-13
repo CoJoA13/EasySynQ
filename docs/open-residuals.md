@@ -377,31 +377,6 @@ the measured evidence. Do not disable or downgrade the lint job, pin a second co
 passing type-check and build as closure while lint is skipped.
 Last reviewed: 2026-09-20
 
-## RES-INGEST-PROGRESS
-
-Status: OPEN
-Owner: Repository owner
-Source: Batch 10, PR [#367](https://github.com/CoJoA13/EasySynQ/pull/367)
-Reason: Ingestion reaper — long dedup/propose stages have no incremental progress signal.
-Closure contract: Add a heartbeat-written progress stamp that advances per batch, covering long
-dedup/propose computation and re-delivered scanning, with its required migration and focused reaper proof.
-Last reviewed: 2026-08-08
-
-`reap_stalled_runs`' backstop is anchored on `repo.max_stage_progress`, but only `import_file` (scan) /
-`import_extract` / `import_classification` are written **per batch**. `import_dupe_cluster` and
-`import_proposal_node` are written **once at stage completion** (`replace_dedup_groups` /
-`replace_proposals`), so a long-running `Deduping`/`Proposing` computation still rides the last classify
-row and could in principle be reaped while alive. Bounded in practice: the ~30-minute source-root lock TTL
-is the effective liveness signal against a 6-hour backstop, so lock-liveness protects a genuinely live
-worker first. **Closing it needs** a heartbeat-written progress stamp (a new column or a per-batch row
-write) + a migration — a slice, not a remediation fix. Raised by both Codex and diff-critic on #367;
-documented at `max_stage_progress`.
-
-⚠ Same root cause, also unclosed: a **re-delivered `Scanning` run** re-walks existing paths via
-`upsert_file`, whose conflict-update does NOT touch `created_at`, so the anchor does not advance on a
-replay either. Every one of these needs the same fix — a timestamp that advances per BATCH, not per
-first-insert or per stage-completion.
-
 ## RES-INGEST-PARTIAL-OPTIN
 
 Status: OPEN

@@ -6,6 +6,90 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## LSH candidate progress follow-up (2026-10-13 UTC)
+
+Review of [#645](https://github.com/CoJoA13/EasySynQ/pull/645) identified candidate construction
+as an uninstrumented phase of the in-process near-duplicate detector. The original completed-batch
+design explicitly excluded that synchronous phase. This bounded follow-up adds checkpoints for
+completed bucket placements and every pair insertion attempt, including repeated attempts across
+bands. The shared pure iterator preserves the synchronous candidate API, pair membership, signature
+math, exact-Jaccard threshold and deterministic cluster output. The detector awaits its existing
+callback after 256 completed operations and a nonempty remainder; callback failures propagate
+before further work or result replacement.
+
+Four focused unit regressions failed on the prior implementation for absent candidate callbacks
+or missing callback exceptions. A real-worker regression independently completed 192 placements,
+480 pair attempts and 15 exact verifications without a candidate checkpoint. This establishes the
+callback gap, not a measured 1,800-second lease breach. The repaired implementation passed
+**46 progress/detector/minhash unit tests** and **123 ingestion/review integration tests**, with
+no failures or skips. The real-worker case observes two independently committed candidate
+heartbeats, advancing timestamps and retained token ownership from separate sessions, reaper
+survival before any output replacement, and one deterministic near cluster with one Proposing
+transition/enqueue. Replay preserves that result. Generic and typed-stop callback exceptions
+are covered; cancellation propagation was reviewed statically without a new cancellation test.
+API Ruff lint/format and mypy across 486 source files passed on the same frozen runtime inputs.
+
+The migration, worker ownership/reaper logic, lock TTL and six-hour backstop are unchanged. The
+full API unit result in the earlier entry remains evidence for that earlier source; fresh PR CI
+is required for this follow-up. Cadence bounds completed work units, not elapsed time. Individual
+operations, singleton-bucket traversal, components, score scans, sorting and final SQL replacement
+retain their synchronous limits. The manual and module introductions now state these limits;
+there is no timer, fabricated progress or arbitrary-input liveness guarantee.
+
+
+## Completed-batch ingestion progress (2026-10-12 UTC)
+
+RES-INGEST-PROGRESS is CLOSED ([#571](https://github.com/CoJoA13/EasySynQ/issues/571),
+originating in [#367](https://github.com/CoJoA13/EasySynQ/pull/367)). Long dedup/proposal
+computation and replayed scanning now advance an internal batch timestamp before final stage
+results exist. Scanning, extraction and classification publish progress after each committed
+batch. Dedup/proposal computation records completed batches and nonempty tails, including
+skipped inputs, while keeping output replacement and stage transitions atomic.
+
+Migration `0095_ingest_batch_progress`, after `0094_backup_schedule_attempt`, adds nullable
+`import_run.last_batch_progress_at` without a default, backfill or index. A short independent
+session on the worker's engine admits the exact stage, source and token under the run-row lock,
+renews the owned Redis token and writes monotonic database statement time. Startup renewal
+alone does not advance progress. Review-time proposal rebuilds retain their caller transaction
+and write no pipeline heartbeat. Expected ownership/status loss rolls back pending outputs
+without advancing, failing or releasing a later stage's token.
+
+The pipeline reaper uses the newest batch stamp, five legacy stage-row maxima and scan start.
+It fails a run after lost token ownership or progress strictly older than the unchanged six-hour
+backstop; the source-lock TTL remains 1,800 seconds. A live lock alone does not defeat the
+backstop, correcting the earlier residual explanation. Failure cleanup uses the captured token
+so a replacement owner's lock survives. Commit recovery and its separate reaper are unchanged.
+
+Independent reviews accepted the plan, actual tests, classified baseline failures and both
+implementation scopes. On the unchanged implementation, **28 cadence/detector/minhash tests**,
+**5 populated/R74 migration tests** and **122 ingestion/review integration tests** passed with
+no skips. The populated migration proof covers upgrade/downgrade/re-upgrade, preserved business
+and audit data, application-role access and schema drift. Runtime regressions cover real long
+Deduping/Proposing and replayed Scanning, independent progress visibility, caller rollback,
+strict cutoffs, both row-lock orderings and replacement-token races.
+
+The full API unit selection passed **5,209 tests, with two existing opt-in skips**, in
+**1,050.25 seconds**. The skipped release digest-pin and built-image checks are not local
+acceptance evidence. An earlier ten-minute wrapper limit interrupted this same source without
+an assertion failure; the suspected audit case passed alone and within the complete unchanged
+selection after allowing a longer bounded run. API and migration Ruff lint/format, mypy across
+486 source files, sole executable Alembic head, authority and whitespace checks passed. The
+tracked implementation tree passed the site-data guard in **14.263 seconds**. The complete
+authority fixture suite then passed **96 checks**, including the closed-residual contract.
+A regression-test comment was renamed after closure; exact inverse-byte and AST comparisons
+preserve the successful Python evidence without repeating it.
+
+Deploy with **stop writers → migrate → start updated writers**. Old workers can use the new
+schema but do not produce batch progress; new workers require the column. Stop updated writers
+before downgrade; it drops only the operational stamp, and re-upgrade restores NULL with legacy
+fallback. Each heartbeat needs another pooled connection. PostgreSQL and Redis remain separate
+systems, and an uninterrupted operation remains subject to the existing lease; no stronger
+fencing or unbounded-duration guarantee is claimed. This internal change adds no API field.
+Live deployment, release-image proof and a full contributor-host setup are not established by
+these local checks. Final documentation guards, complete independent final review, normal hooks
+and PR CI remain separate publication/merge gates.
+
+
 ## Supported local installation artifacts (2026-10-12 UTC)
 
 Closes `RES-SITE-ARTIFACT-GITIGNORE` ([#423](https://github.com/CoJoA13/EasySynQ/issues/423),

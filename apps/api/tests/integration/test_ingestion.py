@@ -10,6 +10,8 @@ import asyncio
 import hashlib
 import uuid
 from collections.abc import Callable
+from contextlib import AsyncExitStack, suppress
+from datetime import timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -574,7 +576,7 @@ async def test_active_run_guard_covers_deduping(
     )  # the Deduping run is still "active"
 
 
-@pytest.mark.parametrize("stalled_state", ["Extracting", "Deduping", "Proposing"])
+@pytest.mark.parametrize("stalled_state", ["Scanning", "Extracting", "Deduping", "Proposing"])
 async def test_reaper_fails_run_with_dead_lock(
     app_client: AsyncClient, token_factory: Callable[..., str], stalled_state: str
 ) -> None:
@@ -3532,3 +3534,1335 @@ async def test_restaged_locator_survives_retained_storage_failure_and_resumes_ex
         assert final_detail["staged_blob_uri"] == restaged_uri
     finally:
         source_path.write_bytes(honest_bytes)
+
+
+# Issue #571: independent readers and real worker callbacks. The compatibility
+# reads below let the behavioral regressions reach the old reaper before asserting new schema.
+_PROGRESS_TABLES = (
+    "import_file",
+    "import_extract",
+    "import_classification",
+    "import_dupe_cluster",
+    "import_version_family",
+    "import_proposal_node",
+)
+
+
+async def _progress_create(app_client, token_factory, *, files=0):
+    admin = _subject(f"progress-{uuid.uuid4().hex}")
+    await _assign_role(admin, "System Administrator")
+    headers = _auth(token_factory, admin)
+    folder = Path(get_settings().import_source_root) / f"progress-{uuid.uuid4().hex}"
+    folder.mkdir()
+    for i in range(files):
+        (folder / f"item{i}.txt").write_text(f"synthetic text for item {i}")
+    response = await app_client.post(
+        "/api/v1/admin/imports", headers=headers, json={"source_root": folder.name}
+    )
+    assert response.status_code == 202, response.text
+    rid = uuid.UUID(response.json()["id"])
+    async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, rid)
+        assert run is not None and run.lock_token is not None
+        return rid, run.source_root_hash, run.lock_token, headers, folder
+
+
+async def _progress_snapshot(rid):
+    async with get_sessionmaker()() as session:
+        return (
+            (
+                await session.execute(
+                    sa.text(
+                        "SELECT status::text, lock_token, counts, completed_at, "
+                        "(to_jsonb(r)->>'last_batch_progress_at')::timestamptz AS stamp "
+                        "FROM import_run r WHERE id=:rid"
+                    ),
+                    {"rid": rid},
+                )
+            )
+            .mappings()
+            .one()
+        )
+
+
+async def _progress_age(rid, status):
+    async with get_sessionmaker()() as session:
+        old = (await session.execute(sa.text("SELECT clock_timestamp()"))).scalar_one()
+        old -= timedelta(hours=7)
+        await session.execute(
+            sa.text("UPDATE import_run SET status=:status, scan_started_at=:old WHERE id=:rid"),
+            {"rid": rid, "status": status, "old": old},
+        )
+        for table in _PROGRESS_TABLES:
+            await session.execute(
+                sa.text(f"UPDATE {table} SET created_at=:old WHERE run_id=:rid"),  # noqa: S608 - fixed table allowlist
+                {"rid": rid, "old": old},
+            )
+        # Backdate any prior producer's new stamp too. On baseline the column is absent;
+        # nothing is skipped in the regression itself, which must fail at the reaper.
+        has_column = await session.scalar(
+            sa.text(
+                "SELECT EXISTS(SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='import_run' AND column_name='last_batch_progress_at')"
+            )
+        )
+        if has_column:
+            await session.execute(
+                sa.text("UPDATE import_run SET last_batch_progress_at=:old WHERE id=:rid"),
+                {"rid": rid, "old": old},
+            )
+        await session.commit()
+        return old
+
+
+async def _progress_events(rid, event_type):
+    async with get_sessionmaker()() as session:
+        return list(
+            (
+                await session.scalars(
+                    select(AuditEvent).where(
+                        AuditEvent.object_id == rid, AuditEvent.event_type == event_type
+                    )
+                )
+            ).all()
+        )
+
+
+async def _progress_token(source_hash):
+    from easysynq_api.services.ingestion import locks
+
+    async with locks._redis() as client:
+        return await client.get(locks._key(source_hash))
+
+
+async def _progress_outputs(rid):
+    async with get_sessionmaker()() as session:
+        return tuple(
+            [
+                await session.scalar(
+                    sa.text(f"SELECT count(*) FROM {table} WHERE run_id=:rid"),  # noqa: S608 - fixed table allowlist
+                    {"rid": rid},
+                )
+                for table in _PROGRESS_TABLES[3:]
+            ]
+        )
+
+
+class _ProgressBarrier:
+    """Two completed batches, each held until its observer has reaped and read back."""
+
+    def __init__(self):
+        self.arrived = [asyncio.Event(), asyncio.Event()]
+        self.resume = [asyncio.Event(), asyncio.Event()]
+        self.count = 0
+
+    async def checkpoint(self):
+        index = self.count
+        self.count += 1
+        if index < 2:
+            self.arrived[index].set()
+            await asyncio.wait_for(self.resume[index].wait(), timeout=15)
+
+    async def close(self, task):
+        for event in self.resume:
+            event.set()
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=15)
+
+
+async def _progress_stage(stage, rid):
+    async with get_sessionmaker()() as session:
+        await stage(session, rid)
+
+
+async def _assert_progress_survives(rid, source_hash, token, status, *, previous=None):
+    from easysynq_api.services.ingestion.service import reap_stalled_runs
+
+    before = await _progress_snapshot(rid)
+    async with get_sessionmaker()() as session:
+        now = await session.scalar(sa.text("SELECT clock_timestamp()"))
+        # A new stamp is already committed: no heartbeat row lock can hide this row.
+        await reap_stalled_runs(session, now=(before["stamp"] or now) + timedelta(hours=1))
+    after = await _progress_snapshot(rid)
+    assert after["status"] == status, "live worker was failed before atomic result replacement"
+    assert await _progress_token(source_hash) == token
+    assert await _progress_events(rid, EventType.IMPORT_RUN_FAILED) == []
+    assert after["stamp"] is not None
+    if previous is not None:
+        assert after["stamp"] > previous
+    return after["stamp"]
+
+
+async def test_reaper_spares_long_dedup_before_result_replace(
+    app_client, token_factory, _stub_tika, monkeypatch
+):
+    from easysynq_api.services.ingestion import dedup
+    from easysynq_api.services.similarity import InProcessMinHashDetector
+    from easysynq_api.tasks.ingestion import propose_source
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory, files=4)
+    for stage in (run_scan, run_extract, run_classify):
+        await _progress_stage(stage, rid)
+    await _progress_age(rid, "Classified")
+    barrier = _ProgressBarrier()
+    enqueued = []
+    monkeypatch.setattr(propose_source, "delay", lambda value: enqueued.append(value))
+
+    class Detector:
+        async def detect_near(self, items, *, threshold, heartbeat):
+            assert len(items) == 4
+            # Complete two real bounded detector computations before calling the worker's
+            # actual callback. Output remains the full real detector's deterministic result.
+            detector = InProcessMinHashDetector()
+            for batch in (items[:2], items[2:]):
+                await detector.detect_near(batch, threshold=threshold)
+                await heartbeat()
+                await barrier.checkpoint()
+            return await detector.detect_near(items, threshold=threshold)
+
+    monkeypatch.setattr(dedup, "get_dedup_detector", Detector)
+    task = asyncio.create_task(_progress_stage(run_dedup, rid))
+    try:
+        stamp = None
+        for i in range(2):
+            await asyncio.wait_for(barrier.arrived[i].wait(), timeout=15)
+            assert await _progress_outputs(rid) == (0, 0, 0)
+            stamp = await _assert_progress_survives(
+                rid, source_hash, token, "Deduping", previous=stamp
+            )
+            barrier.resume[i].set()
+        await asyncio.wait_for(task, timeout=15)
+    finally:
+        await barrier.close(task)
+    assert (await _progress_snapshot(rid))["status"] == "Proposing"
+    assert enqueued == [str(rid)]
+    transitions = await _progress_events(rid, EventType.IMPORT_RUN_STAGE_CHANGED)
+    assert sum(e.after["status"] == "Proposing" for e in transitions) == 1
+    assert await _progress_outputs(rid) == (0, 0, 0)
+    await _progress_stage(run_dedup, rid)
+    assert enqueued == [str(rid)]
+
+
+async def test_reaper_spares_real_lsh_candidate_checkpoints(
+    app_client, token_factory, _stub_tika, monkeypatch
+):
+    import builtins
+
+    from easysynq_api.domain.ingestion import minhash
+    from easysynq_api.services.ingestion import dedup
+    from easysynq_api.services.similarity import InProcessMinHashDetector
+    from easysynq_api.tasks.ingestion import propose_source
+
+    assert isinstance(dedup.get_dedup_detector(), InProcessMinHashDetector)
+    rid, source_hash, token, _, folder = await _progress_create(app_client, token_factory)
+    words = "synthetic retained evidence alpha bravo charlie delta echo".split()
+    for i in range(6):
+        # Internal whitespace survives extraction but normalizes identically. Distinct bytes
+        # prevent exact dedup from removing any of the six actual near-detector inputs.
+        (folder / f"item{i}.txt").write_text((" " * (i + 1)).join(words))
+    for stage in (run_scan, run_extract, run_classify):
+        await _progress_stage(stage, rid)
+    async with get_sessionmaker()() as session:
+        files = list(
+            await session.scalars(
+                select(ImportFile).where(ImportFile.run_id == rid).order_by(ImportFile.filename)
+            )
+        )
+        assert len(files) == 6 and all(f.included_candidate for f in files)
+        assert len({f.sha256 for f in files}) == 6 and all(f.sha256 for f in files)
+        expected_ids = [f.id for f in files]
+        # Equal recency and format make the independently expected canonical/member order
+        # item0..item5 by lexical path, rather than relying on filesystem creation timing.
+        await session.execute(
+            sa.text("UPDATE import_file SET mtime=TIMESTAMPTZ '2020-01-01' WHERE run_id=:rid"),
+            {"rid": rid},
+        )
+        await session.commit()
+    old = await _progress_age(rid, "Classified")
+    barrier = _ProgressBarrier()
+    enqueued = []
+    monkeypatch.setattr(propose_source, "delay", lambda value: enqueued.append(value))
+    candidate_phase = False
+    placements = attempts = verified = 0
+    unique_pairs = set()
+    checkpoints = []
+    original_band_key = minhash._band_key
+    original_jaccard = minhash.exact_jaccard
+    original_pairs = minhash.lsh_candidate_pairs
+    original_work = getattr(minhash, "iter_lsh_candidate_work", None)
+    original_heartbeat = dedup.heartbeat_batch
+
+    def observe_band_key(band):
+        nonlocal placements
+        result = original_band_key(band)
+        placements += 1
+        return result
+
+    def observe_frozenset(values=()):
+        nonlocal attempts
+        result = builtins.frozenset(values)
+        if candidate_phase and isinstance(values, tuple) and len(values) == 2:
+            assert all(isinstance(value, uuid.UUID) for value in values)
+            attempts += 1
+            unique_pairs.add(result)
+        return result
+
+    def observe_jaccard(*args):
+        nonlocal verified
+        verified += 1
+        return original_jaccard(*args)
+
+    def observe_pairs(sigs):
+        nonlocal candidate_phase
+        assert set(sigs) == set(expected_ids)
+        previous = candidate_phase
+        candidate_phase = True
+        try:
+            return original_pairs(sigs)
+        finally:
+            candidate_phase = previous
+
+    def observe_work(sigs):
+        nonlocal candidate_phase
+        assert set(sigs) == set(expected_ids)
+        previous = candidate_phase
+        candidate_phase = True
+        try:
+            # Delegate every marker/pair unchanged. The detector completes its actual set
+            # insertion before calling the real worker heartbeat observed below.
+            yield from original_work(sigs)
+        finally:
+            candidate_phase = previous
+
+    async def observe_heartbeat(*args, **kwargs):
+        await original_heartbeat(*args, **kwargs)
+        if candidate_phase:
+            assert kwargs.get("advanced", True)
+            checkpoints.append((placements, attempts, len(unique_pairs), verified))
+            # heartbeat_batch has returned after its independent progress transaction commits.
+            await barrier.checkpoint()
+
+    monkeypatch.setattr(minhash, "_band_key", observe_band_key)
+    monkeypatch.setattr(minhash, "frozenset", observe_frozenset, raising=False)
+    monkeypatch.setattr(minhash, "exact_jaccard", observe_jaccard)
+    monkeypatch.setattr(minhash, "lsh_candidate_pairs", observe_pairs)
+    # The public wrapper observes baseline LSH too: absence of the new helper must produce
+    # a missing real candidate-checkpoint assertion, rather than an import/attribute failure.
+    if original_work is not None:
+        monkeypatch.setattr(minhash, "iter_lsh_candidate_work", observe_work)
+    monkeypatch.setattr(dedup, "heartbeat_batch", observe_heartbeat)
+    task = asyncio.create_task(_progress_stage(run_dedup, rid))
+    try:
+        stamp = old
+        for i, expected_attempts in enumerate((64, 320)):
+            arrival = asyncio.create_task(barrier.arrived[i].wait())
+            try:
+                done, _ = await asyncio.wait(
+                    (arrival, task), timeout=15, return_when=asyncio.FIRST_COMPLETED
+                )
+                if task in done:
+                    await task
+                assert arrival in done, (
+                    f"real LSH did not checkpoint candidate batch {i + 1}; "
+                    f"observed {placements} placements, {attempts} attempts, "
+                    f"{verified} verifications, checkpoints={checkpoints}"
+                )
+            finally:
+                arrival.cancel()
+                with suppress(asyncio.CancelledError):
+                    await arrival
+            assert checkpoints[-1] == (192, expected_attempts, 15, 0)
+            snapshot = await _progress_snapshot(rid)
+            assert snapshot["status"] == "Deduping" and snapshot["lock_token"] == token
+            assert snapshot["stamp"] > stamp
+            assert await _progress_outputs(rid) == (0, 0, 0)
+            assert enqueued == []
+            stamp = await _assert_progress_survives(
+                rid, source_hash, token, "Deduping", previous=stamp
+            )
+            barrier.resume[i].set()
+        await asyncio.wait_for(task, timeout=15)
+    finally:
+        await barrier.close(task)
+    # The iterator closes before its partial-tail callback, so only the two full batches
+    # are marked in-phase here. Unit cadence tests separately cover the candidate tail.
+    assert checkpoints == [(192, 64, 15, 0), (192, 320, 15, 0)]
+    assert (placements, attempts, verified) == (192, 480, 15)
+    assert (await _progress_snapshot(rid))["status"] == "Proposing"
+    assert await _progress_token(source_hash) == token
+    assert await _progress_events(rid, EventType.IMPORT_RUN_FAILED) == []
+    assert await _progress_outputs(rid) == (1, 0, 0)
+    async with get_sessionmaker()() as session:
+        result = (
+            (
+                await session.execute(
+                    sa.text(
+                        "SELECT id, method::text, member_file_ids, canonical_file_id, jaccard, "
+                        "evidence FROM import_dupe_cluster WHERE run_id=:rid"
+                    ),
+                    {"rid": rid},
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert result["method"] == "near"
+    assert result["member_file_ids"] == expected_ids
+    assert result["canonical_file_id"] == expected_ids[0]
+    assert result["jaccard"] == 1.0 and result["evidence"] == {}
+    assert enqueued == [str(rid)]
+    transitions = await _progress_events(rid, EventType.IMPORT_RUN_STAGE_CHANGED)
+    assert sum(e.after["status"] == "Proposing" for e in transitions) == 1
+    await _progress_stage(run_dedup, rid)
+    assert await _progress_outputs(rid) == (1, 0, 0)
+    async with get_sessionmaker()() as session:
+        replay_id = await session.scalar(
+            sa.text("SELECT id FROM import_dupe_cluster WHERE run_id=:rid"), {"rid": rid}
+        )
+    assert replay_id == result["id"]
+    assert enqueued == [str(rid)]
+    transitions = await _progress_events(rid, EventType.IMPORT_RUN_STAGE_CHANGED)
+    assert sum(e.after["status"] == "Proposing" for e in transitions) == 1
+
+
+async def _progress_seed_inventory(rid, count):
+    async with get_sessionmaker()() as session:
+        run = await ingestion_repo.get_run(session, rid)
+        assert run is not None
+        session.add_all(
+            [
+                ImportFile(
+                    id=uuid.uuid4(),
+                    org_id=run.org_id,
+                    run_id=rid,
+                    rel_path=f"synthetic-{i}.txt",
+                    filename=f"synthetic-{i}.txt",
+                    ext=".txt",
+                    size_bytes=20,
+                    included_candidate=True,
+                    sha256=f"{i:064x}",
+                    scan_flags={"disposition": "included"},
+                )
+                for i in range(count)
+            ]
+        )
+        await session.commit()
+
+
+async def test_reaper_spares_long_propose_before_result_replace(
+    app_client, token_factory, monkeypatch
+):
+    from easysynq_api.services.ingestion import propose
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    await _progress_seed_inventory(rid, 513)
+    await _progress_age(rid, "Proposing")
+    original = propose.rebuild_proposals
+    owner_hint = propose._owner_hint
+    processed = 0
+    last_pause = 0
+    barrier = _ProgressBarrier()
+
+    def count_node(ext):
+        nonlocal processed
+        processed += 1
+        return owner_hint(ext)
+
+    async def rebuild(session, run_id, *, org_id, version, heartbeat=None):
+        async def completed_batch():
+            nonlocal last_pause
+            await heartbeat()
+            # Ignore the baseline's startup callback. The barrier is reached only after
+            # at least 256 additional keep-items have actually been assembled.
+            if processed - last_pause >= 256:
+                last_pause = processed
+                await barrier.checkpoint()
+
+        return await original(
+            session, run_id, org_id=org_id, version=version, heartbeat=completed_batch
+        )
+
+    monkeypatch.setattr(propose, "_owner_hint", count_node)
+    monkeypatch.setattr(propose, "rebuild_proposals", rebuild)
+    task = asyncio.create_task(_progress_stage(run_propose, rid))
+    try:
+        stamp = None
+        for i in range(2):
+            await asyncio.wait_for(barrier.arrived[i].wait(), timeout=15)
+            assert await _progress_outputs(rid) == (0, 0, 0)
+            assert (await _progress_snapshot(rid))["completed_at"] is None
+            assert (await _progress_snapshot(rid))["counts"] is None
+            stamp = await _assert_progress_survives(
+                rid, source_hash, token, "Proposing", previous=stamp
+            )
+            barrier.resume[i].set()
+        await asyncio.wait_for(task, timeout=15)
+    finally:
+        await barrier.close(task)
+    final = await _progress_snapshot(rid)
+    assert final["status"] == "Proposed" and final["completed_at"] is not None
+    assert final["counts"]["proposal"] == {
+        "keep_items": 513,
+        "conflicts": 513,
+        "needs_identifier": 513,
+    }
+    assert await _progress_outputs(rid) == (0, 0, 513)
+    assert await _progress_token(source_hash) is None
+    transitions = await _progress_events(rid, EventType.IMPORT_RUN_STAGE_CHANGED)
+    assert sum(e.after["status"] == "Proposed" for e in transitions) == 1
+    await _progress_stage(run_propose, rid)
+    assert await _progress_outputs(rid) == (0, 0, 513)
+
+
+async def test_replayed_scan_batches_advance_progress_without_new_files(
+    app_client, token_factory, monkeypatch
+):
+    rid, source_hash, token, _, folder = await _progress_create(app_client, token_factory)
+    # Excluded-only replay also represents completed work, without touching source bytes.
+    (folder / "Thumbs.db").write_text("synthetic excluded")
+    (folder / "empty.txt").write_text("")
+    await _progress_stage(run_scan, rid)
+    old = await _progress_age(rid, "Scanning")
+    monkeypatch.setattr(get_settings(), "import_walk_batch_size", 1)
+    async with get_sessionmaker()() as session:
+        inventory = list(
+            (
+                await session.execute(
+                    select(ImportFile.id, ImportFile.rel_path, ImportFile.created_at)
+                    .where(ImportFile.run_id == rid)
+                    .order_by(ImportFile.rel_path)
+                )
+            ).all()
+        )
+    assert len(inventory) == 2 and all(row.created_at == old for row in inventory)
+    get_status = ingestion_repo.get_status
+    barrier = _ProgressBarrier()
+
+    async def after_committed_batch(session, run_id):
+        status = await get_status(session, run_id)
+        if run_id == rid:
+            await barrier.checkpoint()
+        return status
+
+    monkeypatch.setattr(ingestion_repo, "get_status", after_committed_batch)
+    task = asyncio.create_task(_progress_stage(run_scan, rid))
+    try:
+        stamp = None
+        for i in range(2):
+            await asyncio.wait_for(barrier.arrived[i].wait(), timeout=15)
+            async with get_sessionmaker()() as session:
+                observed = list(
+                    (
+                        await session.execute(
+                            select(ImportFile.id, ImportFile.rel_path, ImportFile.created_at)
+                            .where(ImportFile.run_id == rid)
+                            .order_by(ImportFile.rel_path)
+                        )
+                    ).all()
+                )
+            assert observed == inventory, "replay must not insert paths or refresh row timestamps"
+            stamp = await _assert_progress_survives(
+                rid, source_hash, token, "Scanning", previous=stamp
+            )
+            barrier.resume[i].set()
+        await asyncio.wait_for(task, timeout=15)
+    finally:
+        await barrier.close(task)
+    assert (await _progress_snapshot(rid))["status"] == "Scanned"
+    await _progress_stage(run_scan, rid)
+    assert barrier.count == 2
+
+
+async def _progress_stamp(rid, stamp):
+    async with get_sessionmaker()() as session:
+        await session.execute(
+            sa.text("UPDATE import_run SET last_batch_progress_at=:stamp WHERE id=:rid"),
+            {"rid": rid, "stamp": stamp},
+        )
+        await session.commit()
+
+
+async def _heartbeat(rid, source_hash, token, *, status=ImportRunStatus.DEDUPING, advanced=True):
+    from easysynq_api.services.ingestion.progress import heartbeat_batch
+
+    async with get_sessionmaker()() as session:
+        await heartbeat_batch(
+            session,
+            rid,
+            source_root_hash=source_hash,
+            token=token,
+            expected_status=status,
+            ttl=1800,
+            advanced=advanced,
+        )
+
+
+@pytest.mark.parametrize("binding", ["engine", "connection"])
+async def test_batch_heartbeat_visible_without_committing_outer_session(
+    app_client, token_factory, binding
+):
+    from easysynq_api.services.ingestion.progress import heartbeat_batch
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    await _progress_seed_inventory(rid, 1)
+    old = await _progress_age(rid, "Deduping")
+    async with get_sessionmaker()() as session:
+        engine = session.bind
+    async with AsyncExitStack() as stack:
+        bind = (
+            await stack.enter_async_context(engine.connect()) if binding == "connection" else engine
+        )
+        outer = await stack.enter_async_context(AsyncSession(bind, expire_on_commit=False))
+        # Flush a real unrelated child mutation. A heartbeat committing outer publishes it;
+        # reusing outer's connection makes its progress invisible to the observer below.
+        await outer.execute(
+            sa.text("UPDATE import_file SET scan_flags='{\"pending\": true}' WHERE run_id=:rid"),
+            {"rid": rid},
+        )
+        await asyncio.wait_for(
+            heartbeat_batch(
+                outer,
+                rid,
+                source_root_hash=source_hash,
+                token=token,
+                expected_status=ImportRunStatus.DEDUPING,
+                ttl=1800,
+            ),
+            timeout=15,
+        )
+        assert (await _progress_snapshot(rid))["stamp"] > old
+        async with get_sessionmaker()() as reader:
+            flags = await reader.scalar(
+                sa.text("SELECT scan_flags FROM import_file WHERE run_id=:rid"), {"rid": rid}
+            )
+        assert flags == {"disposition": "included"}
+        await outer.rollback()
+    async with get_sessionmaker()() as reader:
+        assert await reader.scalar(
+            sa.text("SELECT scan_flags FROM import_file WHERE run_id=:rid"), {"rid": rid}
+        ) == {"disposition": "included"}
+
+
+async def test_batch_stamp_uses_heartbeat_statement_clock_and_is_monotonic(
+    app_client, token_factory, monkeypatch
+):
+    # Import is intentionally inside the test: baseline behavioral tests still collect.
+    from easysynq_api.services.ingestion.progress import heartbeat_batch
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    await _progress_age(rid, "Deduping")
+    original = ingestion_repo.record_batch_progress
+    clocks = []
+
+    async def observe_statement(session, run_id, **kwargs):
+        transaction_start = await session.scalar(sa.text("SELECT transaction_timestamp()"))
+        before_statement = await session.scalar(sa.text("SELECT clock_timestamp()"))
+        assert before_statement > transaction_start
+        clocks.append((transaction_start, before_statement))
+        return await original(session, run_id, **kwargs)
+
+    monkeypatch.setattr(ingestion_repo, "record_batch_progress", observe_statement)
+    async with get_sessionmaker()() as outer:
+        await outer.execute(sa.text("SELECT transaction_timestamp()"))
+        for _ in range(2):
+            await heartbeat_batch(
+                outer,
+                rid,
+                source_root_hash=source_hash,
+                token=token,
+                expected_status=ImportRunStatus.DEDUPING,
+                ttl=1800,
+            )
+            stamp = (await _progress_snapshot(rid))["stamp"]
+            # now()/CURRENT_TIMESTAMP in the HEARTBEAT transaction fails this assertion.
+            assert stamp >= clocks[-1][1] > clocks[-1][0]
+    future = stamp + timedelta(minutes=5)
+    await _progress_stamp(rid, future)
+    await asyncio.wait_for(
+        asyncio.gather(_heartbeat(rid, source_hash, token), _heartbeat(rid, source_hash, token)),
+        timeout=15,
+    )
+    assert (await _progress_snapshot(rid))["stamp"] == future
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "absent",
+        "null-token",
+        "null-stored-token",
+        "stored-token",
+        "source-hash",
+        "foreign-token",
+        "missing-key",
+        "Cancelled",
+        "Failed",
+        "Proposing",
+    ],
+)
+async def test_heartbeat_rejects_stale_owner_or_stage(app_client, token_factory, case):
+    from easysynq_api.services.ingestion import locks, progress
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    old = await _progress_age(rid, "Deduping")
+    target_id, supplied_hash, supplied_token = rid, source_hash, token
+    if case == "absent":
+        target_id = uuid.uuid4()
+    elif case == "null-token":
+        supplied_token = None
+    elif case == "source-hash":
+        supplied_hash = "synthetic-wrong-source-hash"
+    elif case in ("null-stored-token", "stored-token", "Cancelled", "Failed", "Proposing"):
+        async with get_sessionmaker()() as session:
+            column = "lock_token" if case in ("null-stored-token", "stored-token") else "status"
+            value = (
+                None
+                if case == "null-stored-token"
+                else "different-stored-token"
+                if case == "stored-token"
+                else case
+            )
+            await session.execute(
+                sa.text(f"UPDATE import_run SET {column}=:value WHERE id=:rid"),  # noqa: S608 - two fixed columns
+                {"rid": rid, "value": value},
+            )
+            await session.commit()
+    elif case in ("foreign-token", "missing-key"):
+        await locks.release(source_hash, token)
+        if case == "foreign-token":
+            assert await locks.acquire(source_hash, ttl=1800) is not None
+    before = await _progress_snapshot(rid)
+    redis_before = await _progress_token(source_hash)
+    events = await _progress_events(rid, EventType.IMPORT_RUN_STAGE_CHANGED)
+    with pytest.raises(progress.PipelineProgressStopped):
+        await _heartbeat(target_id, supplied_hash, supplied_token)
+    assert (await _progress_snapshot(rid))["stamp"] == old
+    assert (await _progress_snapshot(rid))["status"] == before["status"]
+    assert await _progress_token(source_hash) == redis_before
+    assert await _progress_events(rid, EventType.IMPORT_RUN_FAILED) == []
+    assert len(await _progress_events(rid, EventType.IMPORT_RUN_STAGE_CHANGED)) == len(events)
+
+
+async def test_renew_without_batch_does_not_advance_progress(app_client, token_factory):
+    from easysynq_api.services.ingestion import locks
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    old = await _progress_age(rid, "Deduping")
+    async with locks._redis() as client:
+        await client.expire(locks._key(source_hash), 30)
+    await _heartbeat(rid, source_hash, token, advanced=False)
+    assert (await _progress_snapshot(rid))["stamp"] == old
+    async with locks._redis() as client:
+        assert await client.ttl(locks._key(source_hash)) > 60
+    assert await _progress_token(source_hash) == token
+
+
+@pytest.mark.parametrize("failure", ["redis", "update", "commit"])
+async def test_batch_heartbeat_infrastructure_error_does_not_publish_progress(
+    app_client, token_factory, monkeypatch, failure
+):
+    from easysynq_api.services.ingestion import locks, progress
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    old = await _progress_age(rid, "Deduping")
+
+    async def broken(*args, **kwargs):
+        raise RuntimeError(f"synthetic {failure} outage")
+
+    if failure == "redis":
+        monkeypatch.setattr(locks, "heartbeat", broken)
+    elif failure == "update":
+        monkeypatch.setattr(ingestion_repo, "record_batch_progress", broken)
+    else:
+        monkeypatch.setattr(AsyncSession, "commit", broken)
+    async with get_sessionmaker()() as outer:
+        with pytest.raises(RuntimeError, match=f"synthetic {failure} outage"):
+            await progress.heartbeat_batch(
+                outer,
+                rid,
+                source_root_hash=source_hash,
+                token=token,
+                expected_status=ImportRunStatus.DEDUPING,
+                ttl=1800,
+            )
+    assert (await _progress_snapshot(rid))["stamp"] == old
+    assert await _progress_events(rid, EventType.IMPORT_RUN_FAILED) == []
+
+
+@pytest.mark.parametrize("status", ["Scanning", "Deduping", "Proposing"])
+async def test_reaper_fails_live_lock_without_batch_progress(app_client, token_factory, status):
+    from easysynq_api.services.ingestion.service import reap_stalled_runs
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    await _progress_seed_inventory(rid, 1)
+    old = await _progress_age(rid, status)
+    await _heartbeat(rid, source_hash, token, status=ImportRunStatus(status), advanced=False)
+    assert await _progress_token(source_hash) == token
+    for _ in range(2):
+        async with get_sessionmaker()() as session:
+            await reap_stalled_runs(session, now=old + timedelta(hours=7))
+    assert (await _progress_snapshot(rid))["status"] == "Failed"
+    assert (await _progress_snapshot(rid))["stamp"] == old
+    events = await _progress_events(rid, EventType.IMPORT_RUN_FAILED)
+    assert len(events) == 1 and events[0].actor_type is ActorType.system
+    assert events[0].after == {"error": "stage_timeout"}
+    assert await _progress_token(source_hash) is None
+
+
+@pytest.mark.parametrize("ownership", ["missing", "foreign"])
+@pytest.mark.parametrize("status", ["Scanning", "Deduping", "Proposing"])
+async def test_reaper_fails_fresh_progress_without_owned_lock(
+    app_client, token_factory, ownership, status
+):
+    from easysynq_api.services.ingestion import locks
+    from easysynq_api.services.ingestion.service import reap_stalled_runs
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    await _progress_age(rid, status)
+    await _heartbeat(rid, source_hash, token, status=ImportRunStatus(status))
+    fresh = (await _progress_snapshot(rid))["stamp"]
+    await locks.release(source_hash, token)
+    replacement = await locks.acquire(source_hash, ttl=1800) if ownership == "foreign" else None
+    async with get_sessionmaker()() as session:
+        await reap_stalled_runs(session, now=fresh)
+    assert (await _progress_snapshot(rid))["status"] == "Failed"
+    assert (await _progress_snapshot(rid))["stamp"] == fresh
+    assert await _progress_token(source_hash) == replacement
+    assert len(await _progress_events(rid, EventType.IMPORT_RUN_FAILED)) == 1
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["null-stamp", "fresh-stamp", "fresh-row", "scan-start", "cutoff", "older"],
+)
+async def test_stage_progress_uses_max_of_stamp_and_legacy_rows(app_client, token_factory, case):
+    from easysynq_api.services.ingestion.service import reap_stalled_runs
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    old = await _progress_age(rid, "Extracting")
+    now = old + timedelta(hours=7)
+    cutoff = now - timedelta(hours=6)
+    stamp = None if case in ("null-stamp", "scan-start") else old
+    row_time = now if case in ("null-stamp", "fresh-row") else old
+    if case == "fresh-stamp":
+        stamp = now
+    if case in ("cutoff", "older"):
+        stamp = cutoff if case == "cutoff" else cutoff - timedelta(microseconds=1)
+    await _progress_stamp(rid, stamp)
+    if case != "scan-start":
+        await _progress_seed_inventory(rid, 1)
+        async with get_sessionmaker()() as session:
+            await session.execute(
+                sa.text("UPDATE import_file SET created_at=:old WHERE run_id=:rid"),
+                {"rid": rid, "old": old},
+            )
+            await session.execute(
+                sa.text(
+                    "INSERT INTO import_extract (id,org_id,run_id,file_id,status,created_at) "
+                    "SELECT :eid,org_id,run_id,id,'extracted',:at "
+                    "FROM import_file WHERE run_id=:rid"
+                ),
+                {"eid": uuid.uuid4(), "rid": rid, "at": row_time},
+            )
+            await session.commit()
+    else:
+        async with get_sessionmaker()() as session:
+            await session.execute(
+                sa.text("UPDATE import_run SET scan_started_at=:now WHERE id=:rid"),
+                {"rid": rid, "now": now},
+            )
+            await session.commit()
+    async with get_sessionmaker()() as session:
+        expected = (
+            None if case == "scan-start" else max(t for t in (stamp, row_time) if t is not None)
+        )
+        assert await ingestion_repo.max_stage_progress(session, rid) == expected
+        await reap_stalled_runs(session, now=now)
+    assert (await _progress_snapshot(rid))["status"] == (
+        "Failed" if case == "older" else "Extracting"
+    )
+    assert await _progress_token(source_hash) == (None if case == "older" else token)
+
+
+async def test_reaper_cleanup_preserves_replacement_lock(app_client, token_factory, monkeypatch):
+    from easysynq_api.services.ingestion import locks
+    from easysynq_api.services.ingestion.service import reap_stalled_runs
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    old = await _progress_age(rid, "Deduping")
+    entered, resume = asyncio.Event(), asyncio.Event()
+    release, force_release = locks.release, locks.force_release
+
+    async def pause_then_release(source, *args):
+        if source == source_hash:
+            entered.set()
+            await asyncio.wait_for(resume.wait(), timeout=15)
+        return await release(source, *args)
+
+    async def pause_then_force(source):
+        if source == source_hash:
+            entered.set()
+            await asyncio.wait_for(resume.wait(), timeout=15)
+        return await force_release(source)
+
+    monkeypatch.setattr(locks, "release", pause_then_release)
+    monkeypatch.setattr(locks, "force_release", pause_then_force)
+
+    async def reap():
+        async with get_sessionmaker()() as session:
+            await reap_stalled_runs(session, now=old + timedelta(hours=7))
+
+    task = asyncio.create_task(reap())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=15)
+        assert (await _progress_snapshot(rid))["status"] == "Failed"
+        await release(source_hash, token)
+        replacement = await locks.acquire(source_hash, ttl=1800)
+        assert replacement is not None and replacement != token
+        resume.set()
+        await asyncio.wait_for(task, timeout=15)
+        assert await _progress_token(source_hash) == replacement
+        assert len(await _progress_events(rid, EventType.IMPORT_RUN_FAILED)) == 1
+    finally:
+        resume.set()
+        if not task.done():
+            task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.parametrize("first", ["heartbeat", "reaper"])
+async def test_reaper_heartbeat_row_lock_ordering(app_client, token_factory, monkeypatch, first):
+    from easysynq_api.services.ingestion import locks, progress
+    from easysynq_api.services.ingestion.service import reap_stalled_runs
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    old = await _progress_age(rid, "Deduping")
+    entered, resume, attempted = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    real_heartbeat = locks.heartbeat
+    real_max = ingestion_repo.max_stage_progress
+    async with get_sessionmaker()() as session:
+        engine = session.bind
+
+    async def pause_heartbeat(source, supplied, *, ttl):
+        result = await real_heartbeat(source, supplied, ttl=ttl)
+        if source == source_hash and first == "heartbeat":
+            entered.set()
+            await asyncio.wait_for(resume.wait(), timeout=15)
+        return result
+
+    async def pause_reaper(session, run_id):
+        if run_id == rid and first == "reaper":
+            entered.set()
+            await asyncio.wait_for(resume.wait(), timeout=15)
+        return await real_max(session, run_id)
+
+    def attempted_read(conn, cursor, statement, parameters, context, executemany):
+        sql = statement.lower()
+        if "import_run" in sql and "for update" in sql and "skip locked" not in sql:
+            attempted.set()
+
+    monkeypatch.setattr(locks, "heartbeat", pause_heartbeat)
+    monkeypatch.setattr(ingestion_repo, "max_stage_progress", pause_reaper)
+    sa.event.listen(engine.sync_engine, "before_cursor_execute", attempted_read)
+
+    async def reap():
+        async with get_sessionmaker()() as session:
+            return await reap_stalled_runs(session, now=old + timedelta(hours=7))
+
+    leader = asyncio.create_task(
+        _heartbeat(rid, source_hash, token) if first == "heartbeat" else reap()
+    )
+    follower = None
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=15)
+        if first == "heartbeat":
+            await asyncio.wait_for(reap(), timeout=15)
+            assert (await _progress_snapshot(rid))["status"] == "Deduping"
+            resume.set()
+            await asyncio.wait_for(leader, timeout=15)
+            await reap()  # Essential: survive again AFTER the heartbeat's row lock is gone.
+            assert (await _progress_snapshot(rid))["status"] == "Deduping"
+            assert (await _progress_snapshot(rid))["stamp"] > old
+        else:
+            follower = asyncio.create_task(_heartbeat(rid, source_hash, token))
+            await asyncio.wait_for(attempted.wait(), timeout=15)
+            assert not follower.done()
+            resume.set()
+            await asyncio.wait_for(leader, timeout=15)
+            with pytest.raises(progress.PipelineProgressStopped):
+                await asyncio.wait_for(follower, timeout=15)
+            assert (await _progress_snapshot(rid))["status"] == "Failed"
+            assert (await _progress_snapshot(rid))["stamp"] == old
+            assert len(await _progress_events(rid, EventType.IMPORT_RUN_FAILED)) == 1
+    finally:
+        sa.event.remove(engine.sync_engine, "before_cursor_execute", attempted_read)
+        resume.set()
+        for task in (leader, follower):
+            if task is not None:
+                if not task.done():
+                    task.cancel()
+                with suppress(asyncio.CancelledError, progress.PipelineProgressStopped):
+                    await asyncio.wait_for(task, timeout=15)
+
+
+async def test_old_stage_callback_does_not_release_next_stage_lock(
+    app_client, token_factory, _stub_tika, monkeypatch
+):
+    from easysynq_api.tasks.ingestion import propose_source
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory, files=2)
+    for stage in (run_scan, run_extract, run_classify):
+        await _progress_stage(stage, rid)
+    old = await _progress_age(rid, "Deduping")
+    enqueued = []
+    monkeypatch.setattr(propose_source, "delay", lambda value: enqueued.append(value))
+
+    context = ingestion_repo.included_files_with_context
+
+    async def next_stage_wins(session, run_id, version):
+        rows = await context(session, run_id, version)
+        async with get_sessionmaker()() as session:
+            await session.execute(
+                sa.text("UPDATE import_run SET status='Proposing' WHERE id=:rid"), {"rid": rid}
+            )
+            await session.commit()
+        return rows
+
+    monkeypatch.setattr(ingestion_repo, "included_files_with_context", next_stage_wins)
+    await asyncio.wait_for(_progress_stage(run_dedup, rid), timeout=15)
+    assert (await _progress_snapshot(rid))["status"] == "Proposing"
+    assert await _progress_token(source_hash) == token
+    assert (await _progress_snapshot(rid))["stamp"] == old
+    assert await _progress_outputs(rid) == (0, 0, 0)
+    assert enqueued == []
+    assert await _progress_events(rid, EventType.IMPORT_RUN_FAILED) == []
+
+
+@pytest.mark.parametrize("stage_name", ["extract", "classify"])
+async def test_extract_and_classify_batches_publish_progress(
+    app_client, token_factory, _stub_tika, monkeypatch, stage_name
+):
+    rid, _, _, _, _ = await _progress_create(app_client, token_factory, files=2)
+    await _progress_stage(run_scan, rid)
+    if stage_name == "classify":
+        await _progress_stage(run_extract, rid)
+    working = "Extracting" if stage_name == "extract" else "Classifying"
+    await _progress_age(rid, working)
+    monkeypatch.setattr(get_settings(), f"import_{stage_name}_batch_size", 1)
+    name = f"files_pending_{stage_name}"
+    original = getattr(ingestion_repo, name)
+    barrier = _ProgressBarrier()
+    calls = 0
+
+    async def pending(session, run_id, *args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls in (2, 3):
+            await barrier.checkpoint()
+        return await original(session, run_id, *args, **kwargs)
+
+    monkeypatch.setattr(ingestion_repo, name, pending)
+    stage = run_extract if stage_name == "extract" else run_classify
+    table = "import_extract" if stage_name == "extract" else "import_classification"
+    task = asyncio.create_task(_progress_stage(stage, rid))
+    try:
+        previous = None
+        for i in range(2):
+            await asyncio.wait_for(barrier.arrived[i].wait(), timeout=15)
+            observed = await _progress_snapshot(rid)
+            assert observed["status"] == working
+            assert observed["stamp"] is not None
+            if previous is not None:
+                assert observed["stamp"] > previous
+            previous = observed["stamp"]
+            async with get_sessionmaker()() as session:
+                assert (
+                    await session.scalar(
+                        sa.text(f"SELECT count(*) FROM {table} WHERE run_id=:rid"),  # noqa: S608 - fixed table allowlist
+                        {"rid": rid},
+                    )
+                    == i + 1
+                )
+            barrier.resume[i].set()
+        await asyncio.wait_for(task, timeout=15)
+    finally:
+        await barrier.close(task)
+    final_stamp = (await _progress_snapshot(rid))["stamp"]
+    await _progress_stage(stage, rid)
+    assert (await _progress_snapshot(rid))["stamp"] == final_stamp
+
+
+async def test_review_rebuild_does_not_write_pipeline_progress_or_commit(
+    app_client, token_factory, monkeypatch
+):
+    from easysynq_api.services.ingestion import locks, propose
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    await _progress_seed_inventory(rid, 2)
+    old = await _progress_age(rid, "Reviewing")
+    await locks.release(source_hash, token)
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("a review rebuild must not heartbeat a pipeline lease")
+
+    monkeypatch.setattr(locks, "heartbeat", forbidden)
+    async with get_sessionmaker()() as outer:
+        run = await ingestion_repo.get_run(outer, rid, for_update=True)
+        run.profile = "uncommitted-review-profile"
+        await outer.flush()
+        counts = await asyncio.wait_for(
+            propose.rebuild_proposals(
+                outer, rid, org_id=run.org_id, version=run.classifier_version, heartbeat=None
+            ),
+            timeout=15,
+        )
+        assert counts["proposal"]["keep_items"] == 2
+        assert await _progress_outputs(rid) == (0, 0, 0)
+        assert (await _progress_snapshot(rid))["stamp"] == old
+        assert (
+            await outer.scalar(
+                sa.text("SELECT last_batch_progress_at FROM import_run WHERE id=:rid"), {"rid": rid}
+            )
+            == old
+        )
+        async with get_sessionmaker()() as reader:
+            assert (
+                await reader.scalar(
+                    sa.text("SELECT profile FROM import_run WHERE id=:rid"), {"rid": rid}
+                )
+                != "uncommitted-review-profile"
+            )
+        await outer.rollback()
+    assert await _progress_outputs(rid) == (0, 0, 0)
+    assert await _progress_token(source_hash) is None
+
+
+@pytest.mark.parametrize("stage_name", ["scan", "dedup", "propose"])
+@pytest.mark.parametrize("interruption", ["cancel", "lost-owner"])
+async def test_worker_callback_stops_cancelled_or_lost_owner(
+    app_client, token_factory, _stub_tika, monkeypatch, stage_name, interruption
+):
+    from easysynq_api.services.ingestion import dedup, locks, propose, service
+    from easysynq_api.tasks.ingestion import extract_source, propose_source
+
+    rid, source_hash, token, headers, _ = await _progress_create(app_client, token_factory, files=2)
+    if stage_name != "scan":
+        for stage in (run_scan, run_extract, run_classify):
+            await _progress_stage(stage, rid)
+    await _progress_age(
+        rid, {"scan": "Scanning", "dedup": "Deduping", "propose": "Proposing"}[stage_name]
+    )
+    enqueued = []
+    for task in (extract_source, propose_source):
+        monkeypatch.setattr(task, "delay", lambda value: enqueued.append(value))
+    replacement = None
+    interrupted = False
+
+    async def interrupt():
+        nonlocal interrupted, replacement
+        if interrupted:
+            return
+        interrupted = True
+        if interruption == "cancel":
+            response = await app_client.post(f"/api/v1/admin/imports/{rid}/cancel", headers=headers)
+            assert response.status_code == 200, response.text
+        else:
+            await locks.release(source_hash, token)
+            replacement = await locks.acquire(source_hash, ttl=1800)
+            assert replacement is not None
+
+    if stage_name == "scan":
+        original = service._process_file
+
+        async def process(*args):
+            result = await original(*args)
+            await interrupt()
+            return result
+
+        monkeypatch.setattr(service, "_process_file", process)
+    elif stage_name == "dedup":
+        original_detector = dedup.get_dedup_detector()
+
+        class InterruptedDetector:
+            async def detect_near(self, items, *, threshold, heartbeat):
+                await interrupt()
+                await heartbeat()
+                return await original_detector.detect_near(
+                    items, threshold=threshold, heartbeat=heartbeat
+                )
+
+        monkeypatch.setattr(dedup, "get_dedup_detector", InterruptedDetector)
+    else:
+        original = propose.rebuild_proposals
+
+        async def rebuild(session, run_id, *, org_id, version, heartbeat=None):
+            async def stopped():
+                await interrupt()
+                await heartbeat()
+
+            return await original(
+                session, run_id, org_id=org_id, version=version, heartbeat=stopped
+            )
+
+        monkeypatch.setattr(propose, "rebuild_proposals", rebuild)
+    stage = {"scan": run_scan, "dedup": run_dedup, "propose": run_propose}[stage_name]
+    await asyncio.wait_for(_progress_stage(stage, rid), timeout=15)
+    assert interrupted
+    expected = (
+        "Cancelled"
+        if interruption == "cancel"
+        else {"scan": "Scanning", "dedup": "Deduping", "propose": "Proposing"}[stage_name]
+    )
+    assert (await _progress_snapshot(rid))["status"] == expected
+    assert await _progress_outputs(rid) == (0, 0, 0)
+    assert enqueued == []
+    assert await _progress_token(source_hash) == replacement
+    assert await _progress_events(rid, EventType.IMPORT_RUN_FAILED) == []
+    assert len(await _progress_events(rid, EventType.IMPORT_RUN_CANCELLED)) == (
+        interruption == "cancel"
+    )
+
+
+@pytest.mark.parametrize("stage_name", ["scan", "dedup", "propose"])
+async def test_stage_finalization_rolls_back_after_ownership_loss(
+    app_client, token_factory, _stub_tika, monkeypatch, stage_name
+):
+    """Ownership can change after the last successful callback and before finalization."""
+    from easysynq_api.services.ingestion import locks
+    from easysynq_api.tasks.ingestion import extract_source, propose_source
+
+    rid, source_hash, token, _, folder = await _progress_create(app_client, token_factory, files=2)
+    (folder / "item1.txt").write_bytes((folder / "item0.txt").read_bytes())
+    if stage_name != "scan":
+        for stage in (run_scan, run_extract, run_classify):
+            await _progress_stage(stage, rid)
+    status = {"scan": "Scanning", "dedup": "Deduping", "propose": "Proposing"}[stage_name]
+    await _progress_age(rid, status)
+    seam = {"scan": "compute_counts", "dedup": "replace_dedup", "propose": "replace_proposals"}[
+        stage_name
+    ]
+    original = getattr(ingestion_repo, seam)
+    replacement = None
+    enqueued = []
+    for task in (extract_source, propose_source):
+        monkeypatch.setattr(task, "delay", lambda value: enqueued.append(value))
+
+    async def replace_then_lose(*args, **kwargs):
+        nonlocal replacement
+        result = await original(*args, **kwargs)
+        await locks.release(source_hash, token)
+        replacement = await locks.acquire(source_hash, ttl=1800)
+        assert replacement is not None
+        return result
+
+    monkeypatch.setattr(ingestion_repo, seam, replace_then_lose)
+    stage = {"scan": run_scan, "dedup": run_dedup, "propose": run_propose}[stage_name]
+    await asyncio.wait_for(_progress_stage(stage, rid), timeout=15)
+    assert replacement is not None
+    assert (await _progress_snapshot(rid))["status"] == status
+    assert (await _progress_snapshot(rid))["completed_at"] is None
+    assert await _progress_outputs(rid) == (0, 0, 0)
+    assert await _progress_token(source_hash) == replacement
+    assert enqueued == []
+    assert await _progress_events(rid, EventType.IMPORT_RUN_FAILED) == []
+
+
+async def test_lock_ownership_check_does_not_renew(app_client, token_factory):
+    from easysynq_api.services.ingestion import locks
+
+    _, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    async with locks._redis() as client:
+        await client.expire(locks._key(source_hash), 60)
+        before = await client.pttl(locks._key(source_hash))
+        assert await locks.is_owned(source_hash, token) is True
+        assert await locks.is_owned(source_hash, "synthetic-wrong-token") is False
+        assert 0 < await client.pttl(locks._key(source_hash)) <= before
+    await locks.release(source_hash, token)
+    assert await locks.is_owned(source_hash, token) is False
+
+
+async def test_reaper_default_clock_matches_database_progress(
+    app_client, token_factory, monkeypatch
+):
+    from easysynq_api.services.ingestion import service
+
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    await _progress_age(rid, "Deduping")
+    await _heartbeat(rid, source_hash, token)
+    stamp = (await _progress_snapshot(rid))["stamp"]
+    monkeypatch.setattr(service, "_now", lambda: stamp + timedelta(days=1))
+    async with get_sessionmaker()() as session:
+        await service.reap_stalled_runs(session)
+    assert (await _progress_snapshot(rid))["status"] == "Deduping"
+    assert await _progress_token(source_hash) == token
+
+
+@pytest.mark.parametrize("guard", ["matching", "status", "token", "source", "absent"])
+async def test_record_batch_progress_is_guarded_and_does_not_commit(
+    app_client, token_factory, guard
+):
+    rid, source_hash, token, _, _ = await _progress_create(app_client, token_factory)
+    old = await _progress_age(rid, "Deduping")
+    async with get_sessionmaker()() as outer:
+        result = await ingestion_repo.record_batch_progress(
+            outer,
+            uuid.uuid4() if guard == "absent" else rid,
+            source_root_hash="wrong-source" if guard == "source" else source_hash,
+            token="wrong-token" if guard == "token" else token,
+            expected_status=ImportRunStatus.PROPOSING
+            if guard == "status"
+            else ImportRunStatus.DEDUPING,
+        )
+        assert result is (guard == "matching")
+        assert (await _progress_snapshot(rid))["stamp"] == old
+        await outer.rollback()
+    assert (await _progress_snapshot(rid))["stamp"] == old
+
+
+async def test_all_legacy_stage_tables_remain_progress_sources(
+    app_client, token_factory, _stub_tika
+):
+    rid, _, _, _, folder = await _progress_create(app_client, token_factory, files=2)
+    (folder / "item1.txt").write_bytes((folder / "item0.txt").read_bytes())
+    await _drive(rid)
+    for table in (
+        "import_file",
+        "import_extract",
+        "import_classification",
+        "import_dupe_cluster",
+        "import_proposal_node",
+    ):
+        old = await _progress_age(rid, "Proposed")
+        fresh = old + timedelta(hours=7)
+        async with get_sessionmaker()() as session:
+            result = await session.execute(
+                sa.text(f"UPDATE {table} SET created_at=:fresh WHERE run_id=:rid"),  # noqa: S608 - fixed table allowlist
+                {"rid": rid, "fresh": fresh},
+            )
+            assert result.rowcount > 0, f"fixture must populate {table}"
+            await session.commit()
+        async with get_sessionmaker()() as reader:
+            assert await ingestion_repo.max_stage_progress(reader, rid) == fresh
+
+
+@pytest.mark.parametrize("stage_name", ["scan", "extract", "classify", "dedup", "propose"])
+async def test_empty_stage_does_not_manufacture_batch_progress(
+    app_client, token_factory, stage_name
+):
+    stages = {
+        "scan": (run_scan, "Scanning", "Scanned"),
+        "extract": (run_extract, "Extracting", "Classifying"),
+        "classify": (run_classify, "Classifying", "Classified"),
+        "dedup": (run_dedup, "Deduping", "Proposing"),
+        "propose": (run_propose, "Proposing", "Proposed"),
+    }
+    rid, _, _, _, _ = await _progress_create(app_client, token_factory)
+    stage, working, final = stages[stage_name]
+    old = await _progress_age(rid, working)
+    await asyncio.wait_for(_progress_stage(stage, rid), timeout=15)
+    observed = await _progress_snapshot(rid)
+    assert observed["status"] == final
+    assert observed["stamp"] == old
