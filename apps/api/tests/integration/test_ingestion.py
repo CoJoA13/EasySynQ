@@ -3745,6 +3745,188 @@ async def test_reaper_spares_long_dedup_before_result_replace(
     assert enqueued == [str(rid)]
 
 
+async def test_reaper_spares_real_lsh_candidate_checkpoints(
+    app_client, token_factory, _stub_tika, monkeypatch
+):
+    import builtins
+
+    from easysynq_api.domain.ingestion import minhash
+    from easysynq_api.services.ingestion import dedup
+    from easysynq_api.services.similarity import InProcessMinHashDetector
+    from easysynq_api.tasks.ingestion import propose_source
+
+    assert isinstance(dedup.get_dedup_detector(), InProcessMinHashDetector)
+    rid, source_hash, token, _, folder = await _progress_create(app_client, token_factory)
+    words = "synthetic retained evidence alpha bravo charlie delta echo".split()
+    for i in range(6):
+        # Internal whitespace survives extraction but normalizes identically. Distinct bytes
+        # prevent exact dedup from removing any of the six actual near-detector inputs.
+        (folder / f"item{i}.txt").write_text((" " * (i + 1)).join(words))
+    for stage in (run_scan, run_extract, run_classify):
+        await _progress_stage(stage, rid)
+    async with get_sessionmaker()() as session:
+        files = list(
+            await session.scalars(
+                select(ImportFile).where(ImportFile.run_id == rid).order_by(ImportFile.filename)
+            )
+        )
+        assert len(files) == 6 and all(f.included_candidate for f in files)
+        assert len({f.sha256 for f in files}) == 6 and all(f.sha256 for f in files)
+        expected_ids = [f.id for f in files]
+        # Equal recency and format make the independently expected canonical/member order
+        # item0..item5 by lexical path, rather than relying on filesystem creation timing.
+        await session.execute(
+            sa.text("UPDATE import_file SET mtime=TIMESTAMPTZ '2020-01-01' WHERE run_id=:rid"),
+            {"rid": rid},
+        )
+        await session.commit()
+    old = await _progress_age(rid, "Classified")
+    barrier = _ProgressBarrier()
+    enqueued = []
+    monkeypatch.setattr(propose_source, "delay", lambda value: enqueued.append(value))
+    candidate_phase = False
+    placements = attempts = verified = 0
+    unique_pairs = set()
+    checkpoints = []
+    original_band_key = minhash._band_key
+    original_jaccard = minhash.exact_jaccard
+    original_pairs = minhash.lsh_candidate_pairs
+    original_work = getattr(minhash, "iter_lsh_candidate_work", None)
+    original_heartbeat = dedup.heartbeat_batch
+
+    def observe_band_key(band):
+        nonlocal placements
+        result = original_band_key(band)
+        placements += 1
+        return result
+
+    def observe_frozenset(values=()):
+        nonlocal attempts
+        result = builtins.frozenset(values)
+        if candidate_phase and isinstance(values, tuple) and len(values) == 2:
+            assert all(isinstance(value, uuid.UUID) for value in values)
+            attempts += 1
+            unique_pairs.add(result)
+        return result
+
+    def observe_jaccard(*args):
+        nonlocal verified
+        verified += 1
+        return original_jaccard(*args)
+
+    def observe_pairs(sigs):
+        nonlocal candidate_phase
+        assert set(sigs) == set(expected_ids)
+        previous = candidate_phase
+        candidate_phase = True
+        try:
+            return original_pairs(sigs)
+        finally:
+            candidate_phase = previous
+
+    def observe_work(sigs):
+        nonlocal candidate_phase
+        assert set(sigs) == set(expected_ids)
+        previous = candidate_phase
+        candidate_phase = True
+        try:
+            # Delegate every marker/pair unchanged. The detector completes its actual set
+            # insertion before calling the real worker heartbeat observed below.
+            yield from original_work(sigs)
+        finally:
+            candidate_phase = previous
+
+    async def observe_heartbeat(*args, **kwargs):
+        await original_heartbeat(*args, **kwargs)
+        if candidate_phase:
+            assert kwargs.get("advanced", True)
+            checkpoints.append((placements, attempts, len(unique_pairs), verified))
+            # heartbeat_batch has returned after its independent progress transaction commits.
+            await barrier.checkpoint()
+
+    monkeypatch.setattr(minhash, "_band_key", observe_band_key)
+    monkeypatch.setattr(minhash, "frozenset", observe_frozenset, raising=False)
+    monkeypatch.setattr(minhash, "exact_jaccard", observe_jaccard)
+    monkeypatch.setattr(minhash, "lsh_candidate_pairs", observe_pairs)
+    # The public wrapper observes baseline LSH too: absence of the new helper must produce
+    # a missing real candidate-checkpoint assertion, rather than an import/attribute failure.
+    if original_work is not None:
+        monkeypatch.setattr(minhash, "iter_lsh_candidate_work", observe_work)
+    monkeypatch.setattr(dedup, "heartbeat_batch", observe_heartbeat)
+    task = asyncio.create_task(_progress_stage(run_dedup, rid))
+    try:
+        stamp = old
+        for i, expected_attempts in enumerate((64, 320)):
+            arrival = asyncio.create_task(barrier.arrived[i].wait())
+            try:
+                done, _ = await asyncio.wait(
+                    (arrival, task), timeout=15, return_when=asyncio.FIRST_COMPLETED
+                )
+                if task in done:
+                    await task
+                assert arrival in done, (
+                    f"real LSH did not checkpoint candidate batch {i + 1}; "
+                    f"observed {placements} placements, {attempts} attempts, "
+                    f"{verified} verifications, checkpoints={checkpoints}"
+                )
+            finally:
+                arrival.cancel()
+                with suppress(asyncio.CancelledError):
+                    await arrival
+            assert checkpoints[-1] == (192, expected_attempts, 15, 0)
+            snapshot = await _progress_snapshot(rid)
+            assert snapshot["status"] == "Deduping" and snapshot["lock_token"] == token
+            assert snapshot["stamp"] > stamp
+            assert await _progress_outputs(rid) == (0, 0, 0)
+            assert enqueued == []
+            stamp = await _assert_progress_survives(
+                rid, source_hash, token, "Deduping", previous=stamp
+            )
+            barrier.resume[i].set()
+        await asyncio.wait_for(task, timeout=15)
+    finally:
+        await barrier.close(task)
+    # The iterator closes before its partial-tail callback, so only the two full batches
+    # are marked in-phase here. Unit cadence tests separately cover the candidate tail.
+    assert checkpoints == [(192, 64, 15, 0), (192, 320, 15, 0)]
+    assert (placements, attempts, verified) == (192, 480, 15)
+    assert (await _progress_snapshot(rid))["status"] == "Proposing"
+    assert await _progress_token(source_hash) == token
+    assert await _progress_events(rid, EventType.IMPORT_RUN_FAILED) == []
+    assert await _progress_outputs(rid) == (1, 0, 0)
+    async with get_sessionmaker()() as session:
+        result = (
+            (
+                await session.execute(
+                    sa.text(
+                        "SELECT id, method::text, member_file_ids, canonical_file_id, jaccard, "
+                        "evidence FROM import_dupe_cluster WHERE run_id=:rid"
+                    ),
+                    {"rid": rid},
+                )
+            )
+            .mappings()
+            .one()
+        )
+    assert result["method"] == "near"
+    assert result["member_file_ids"] == expected_ids
+    assert result["canonical_file_id"] == expected_ids[0]
+    assert result["jaccard"] == 1.0 and result["evidence"] == {}
+    assert enqueued == [str(rid)]
+    transitions = await _progress_events(rid, EventType.IMPORT_RUN_STAGE_CHANGED)
+    assert sum(e.after["status"] == "Proposing" for e in transitions) == 1
+    await _progress_stage(run_dedup, rid)
+    assert await _progress_outputs(rid) == (1, 0, 0)
+    async with get_sessionmaker()() as session:
+        replay_id = await session.scalar(
+            sa.text("SELECT id FROM import_dupe_cluster WHERE run_id=:rid"), {"rid": rid}
+        )
+    assert replay_id == result["id"]
+    assert enqueued == [str(rid)]
+    transitions = await _progress_events(rid, EventType.IMPORT_RUN_STAGE_CHANGED)
+    assert sum(e.after["status"] == "Proposing" for e in transitions) == 1
+
+
 async def _progress_seed_inventory(rid, count):
     async with get_sessionmaker()() as session:
         run = await ingestion_repo.get_run(session, rid)

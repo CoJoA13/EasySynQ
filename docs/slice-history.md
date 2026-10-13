@@ -6,6 +6,37 @@
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
 
+## LSH candidate progress follow-up (2026-10-13 UTC)
+
+Review of [#645](https://github.com/CoJoA13/EasySynQ/pull/645) identified candidate construction
+as an uninstrumented phase of the in-process near-duplicate detector. The original completed-batch
+design explicitly excluded that synchronous phase. This bounded follow-up adds checkpoints for
+completed bucket placements and every pair insertion attempt, including repeated attempts across
+bands. The shared pure iterator preserves the synchronous candidate API, pair membership, signature
+math, exact-Jaccard threshold and deterministic cluster output. The detector awaits its existing
+callback after 256 completed operations and a nonempty remainder; callback failures propagate
+before further work or result replacement.
+
+Four focused unit regressions failed on the prior implementation for absent candidate callbacks
+or missing callback exceptions. A real-worker regression independently completed 192 placements,
+480 pair attempts and 15 exact verifications without a candidate checkpoint. This establishes the
+callback gap, not a measured 1,800-second lease breach. The repaired implementation passed
+**46 progress/detector/minhash unit tests** and **123 ingestion/review integration tests**, with
+no failures or skips. The real-worker case observes two independently committed candidate
+heartbeats, advancing timestamps and retained token ownership from separate sessions, reaper
+survival before any output replacement, and one deterministic near cluster with one Proposing
+transition/enqueue. Replay preserves that result. Generic and typed-stop callback exceptions
+are covered; cancellation propagation was reviewed statically without a new cancellation test.
+API Ruff lint/format and mypy across 486 source files passed on the same frozen runtime inputs.
+
+The migration, worker ownership/reaper logic, lock TTL and six-hour backstop are unchanged. The
+full API unit result in the earlier entry remains evidence for that earlier source; fresh PR CI
+is required for this follow-up. Cadence bounds completed work units, not elapsed time. Individual
+operations, singleton-bucket traversal, components, score scans, sorting and final SQL replacement
+retain their synchronous limits. The manual and module introductions now state these limits;
+there is no timer, fabricated progress or arbitrary-input liveness guarantee.
+
+
 ## Completed-batch ingestion progress (2026-10-12 UTC)
 
 RES-INGEST-PROGRESS is CLOSED ([#571](https://github.com/CoJoA13/EasySynQ/issues/571),

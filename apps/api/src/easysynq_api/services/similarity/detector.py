@@ -12,9 +12,13 @@ that is the §7.2 deterministic tie-break the dedup worker owns (it needs file m
 lacks). Clustering is on **exact-Jaccard re-verification** of LSH candidate pairs, never the MinHash
 estimate (doc 09 §7.1) — so the 0.85 boundary is deterministic.
 
-``detect_near`` is ``async`` and takes an optional ``heartbeat`` coroutine the worker passes to keep
-the ingestion source-root lock alive across a long build; the in-process impl is pure CPU but awaits
-it on a fixed cadence.
+``detect_near`` is ``async`` and takes an optional ``heartbeat`` coroutine. The in-process impl
+awaits it after 256 completed shingle inputs, signatures, LSH bucket placements/pair insertions or
+exact-Jaccard verifications, and each phase's nonempty partial tail. The worker uses these completed
+batches to renew source-root ownership and persist progress. Individual operations, the singleton
+bucket sweep, component assembly, repeated component score scans and sorting remain synchronous;
+this cadence provides progress between completed batches, not a wall-clock or arbitrary-input
+liveness guarantee.
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ from typing import Protocol
 from ...domain.ingestion import minhash
 from ...domain.ingestion.normalize import normalize_text
 
-# Await the heartbeat / yield this often while building signatures + verifying candidate pairs.
+# Await the heartbeat after this many completed operations in each instrumented phase.
 _HEARTBEAT_EVERY = 256
 
 
@@ -94,7 +98,19 @@ class InProcessMinHashDetector:
         if heartbeat is not None and len(shingle_by_id) % _HEARTBEAT_EVERY:
             await heartbeat()
 
-        candidates = minhash.lsh_candidate_pairs(sigs)
+        if heartbeat is None:
+            candidates = minhash.lsh_candidate_pairs(sigs)
+        else:
+            candidates = set()
+            completed = 0
+            for work in minhash.iter_lsh_candidate_work(sigs):
+                if work is not None:
+                    candidates.add(work)
+                completed += 1
+                if completed % _HEARTBEAT_EVERY == 0:
+                    await heartbeat()
+            if completed % _HEARTBEAT_EVERY:
+                await heartbeat()
         # Exact-Jaccard re-verify each candidate pair (the deterministic §7.1 decision). Keep the
         # confirmed pairwise scores so a cluster can report its most-conservative (min) similarity.
         confirmed: list[frozenset[uuid.UUID]] = []

@@ -7,9 +7,12 @@ file is claimed by at most one), picks each cluster/family's canonical by the **
 (``version_family.order_members``), then **atomically replaces** the run's clusters/families
 (DELETE-then-INSERT in one txn) and transitions ``Deduping → Proposing``, chaining to Stage 5. It is
 idempotent (status-guarded re-delivery + whole-run replace) and fail-closed (classify precedent).
-The source-root lock is held continuously (NOT released here) and **heartbeated from inside the
-near-dup compute** (the detector calls back) so a long build is never mis-reaped. It writes NOTHING
-to the vault.
+The source-root lock is held continuously (NOT released here). Completed computation batches,
+including the near-dup detector's LSH bucket placements and pair insertions, call back to renew
+ownership and persist progress between batches. Individual operations, synchronous component
+assembly, component score scans, context/item comprehensions, canonical sorting and SQL replacement
+remain outside that cadence; there is no arbitrary-input liveness guarantee. It writes NOTHING to
+the vault.
 """
 
 from __future__ import annotations
