@@ -131,13 +131,17 @@ org email flag and the recipient's own preferences).
 >   syslog daemon, and neither bind-mounts the host socket, so a `/dev/log` value would look
 >   configured and reliably fail. Either point it at a collector reachable from the container
 >   (`syslog.internal:514`), or mount the host journald socket into **both** `worker` and `beat` —
->   the two services that run the nightly jobs — via a compose override, then set `/dev/log`:
+>   the two services that run the nightly jobs — by placing this fragment in
+>   `infra/compose/compose.site.yml`, then set `/dev/log`:
 >
 >   ```yaml
 >   services:
 >     worker: { volumes: ["/dev/log:/dev/log"] }
 >     beat:   { volumes: ["/dev/log:/dev/log"] }
 >   ```
+>
+>   Include the file explicitly as described in
+>   [Local installation artifacts](install-online.md#local-installation-artifacts).
 >
 >   Linux hosts with journald only (there is no host `/dev/log` under Docker Desktop). Mounted, this
 >   is the air-gap-friendly choice under D1 — no network egress at all.

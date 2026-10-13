@@ -125,6 +125,11 @@ The installer:
 If `.env` already exists, the installer preserves its secrets and operator settings. Review the
 file rather than assuming it was regenerated.
 
+Before creating local deployment artifacts, follow
+[Local installation artifacts](../runbooks/install-online.md#local-installation-artifacts) for the
+optional `infra/compose/compose.site.yml` overlay, its explicit inclusion, and Git ignore
+protection.
+
 ### 4.3 Create the first administrator in EasySynQ
 
 ```bash
@@ -179,7 +184,9 @@ The Roles tab is an inspector for seeded bundles; it is not a custom-role editor
 
 ## 5. Internal CA rollout
 
-For `--tls internal`, export the Caddy root:
+For `--tls internal`, export the Caddy root from the repository root. The command writes the
+ignored `easysynq-root-ca.crt` there; confirm its protection and keep it under operator custody as
+described in [Local installation artifacts](../runbooks/install-online.md#local-installation-artifacts):
 
 ```bash
 EASYSYNQ_PROFILE_NAME="$(sed -n 's/^EASYSYNQ_PROFILE=\([^[:space:]#]*\).*/\1/p' .env)"

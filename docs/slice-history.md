@@ -59,6 +59,59 @@ these local checks. Final documentation guards, complete independent final revie
 and PR CI remain separate publication/merge gates.
 
 
+## Supported local installation artifacts (2026-10-12 UTC)
+
+Closes `RES-SITE-ARTIFACT-GITIGNORE` ([#423](https://github.com/CoJoA13/EasySynQ/issues/423),
+original item 3). The installation guidance now names `infra/compose/compose.site.yml` as the
+optional operator-local Compose overlay and root-level `easysynq-root-ca.crt` as the CA export.
+Two exact root-anchored rules prevent routine staging. Required Compose files, offline flags,
+socket restrictions and installer behavior are preserved; manual overlay use remains explicit.
+The runbooks, installation/administrator manuals and existing syslog example share this path.
+
+The public Git proof used nonexistent paths and created no installation artifacts. Both paths
+were unignored before their rules were added. Individual and combined checks now return status 0
+and identify exactly the root `.gitignore` rules:
+
+```text
+.gitignore:11:/infra/compose/compose.site.yml	infra/compose/compose.site.yml
+.gitignore:12:/easysynq-root-ca.crt	easysynq-root-ca.crt
+```
+
+Seven neighboring filename/extension/suffix/root-anchoring controls return status 1 with no
+output. All **eight** base and `compose.*.yml` files remain tracked, with exact baseline/index
+manifest equality and no ignore-rule match under `--no-index`. Neither local artifact is tracked.
+This proof protects the two documented paths; it does not permit site data in other filenames.
+
+Four affected documentation-content tests, the contributor-hosting contract, authority and
+whitespace checks passed. The final path's full tracked-tree site-data scan passed in **14.914
+seconds**. The content/hosting checks ran before the filename correction; inverse-byte comparison
+proved its only product changes were twelve path substitutions, preserving their tested meanings.
+The scanner and its policy were unchanged. No deployment, certificate export or runtime behavior
+was exercised or changed by this documentation correction.
+
+
+## Doc 11 follows implemented design tokens (2026-10-12 UTC)
+
+Closes `RES-DOC11-TOKEN-DRIFT` ([#562](https://github.com/CoJoA13/EasySynQ/issues/562)).
+[Doc 11](11-ui-ux-design-system.md) now cites the shipped typography, accent, focus and shell
+sources. It describes Archivo and system monospace, all seven type roles, the separate accent
+fill/text/focus roles, the solid focus shadow and forced-colors outline, and the actual shell and
+drawer consumers. Token names replace the stale copied values. Product decisions remain binding;
+`tokens.css` supplies implemented token values, and consumers establish actual use.
+
+The same documentation rewrite carries R69 account/scheme semantics and R70's organization-zone,
+US-date and 24-hour display standard. Existing date/time convergence remains open, as do #563 font
+glyph acceptance and #561 page structure. Responsive icon-rail behavior remains a target.
+No runtime code, token values, fonts, contrast settings or layout behavior changed.
+
+Independent plan and implementation reviews approved the correction and its bounded closure
+pointers. The source-based content proof checked **61 declared token references** and **seven
+exact typography rows**, with stale font/accent/shell claims absent. Repository-authority and
+whitespace checks passed; the implementation tree's site-data scan passed in **14.667 seconds**.
+These are documentation checks; no new browser or contrast-suite result is claimed. The August
+implementation history is preserved, with its former open pointer linked to this dated correction.
+
+
 ## First-administrator recovery retains provider validation semantics (2026-10-12 UTC)
 
 Follow-up candidate for [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642).

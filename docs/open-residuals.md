@@ -250,28 +250,6 @@ contract for a section whose faces delegate to a frame is part of this record's 
 against it.
 Last reviewed: 2026-09-02 (third blocker closed by S-capa-width-railfoot-order)
 
-## RES-DOC11-TOKEN-DRIFT
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ui-1 to S-ui-3, 2026-08-29
-Reason: `docs/11-ui-ux-design-system.md` now contradicts the shipped design tokens on four points. It
-names Inter as the self-hosted sans and JetBrains Mono as the monospace, where the shipped stack is
-Archivo plus a system monospace; it gives the accent and the focus ring as `#2A6FDB`, where the
-shipped accent is the brand mark's teal and the focus ring is a solid teal token corrected for WCAG
-2.2 SC 1.4.11; and it states shell metrics of a 56px top bar and a 264px rail, where the shipped
-layout tokens are 58px and 244px and `AppShell` now reads them. The accent and focus-ring
-divergences predate this program, but were inert while nothing consumed the tokens; S-ui-1 is the
-slice that made them authoritative, so the divergence is now load-bearing rather than latent. The
-program plan schedules the correction under its final sweep slice, which has not shipped, and a
-deferral recorded only in a plan file is not in the live ledger this document owns.
-Closure contract: Bring doc 11 into agreement with `apps/web/src/theme/tokens.css` for typography,
-accent, focus ring and shell metrics, citing the token names rather than restating literal values so
-the two cannot drift again; or, if a value in doc 11 is the intended design and the token is wrong,
-change the token instead and prove the contrast gate still passes. Either way the fix must name
-which of the two documents is authoritative for a design value.
-Last reviewed: 2026-08-29
-
 ## RES-ARCHIVO-SYMBOL-GLYPHS
 
 Status: OPEN
@@ -805,24 +783,6 @@ prevent. Prove the result with an executable assertion per changed surface, and 
 against the current output. `formatTimestamp`'s missing `timeZone` should be fixed first and can be
 proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02
-
-## RES-SITE-ARTIFACT-GITIGNORE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #423](https://github.com/CoJoA13/EasySynQ/issues/423) item 3, filed
-2026-08-03; items 1 and 2 were mooted when the deployment record they corrected was removed. Verified
-against `3d8613a` on 2026-09-22.
-Reason: The install runbooks tell operators to create site-specific Compose overlays and to export the
-installation root CA as `easysynq-root-ca.crt` inside the working tree, but `.gitignore` covers
-neither. A routine `git add -A` on an operator checkout can therefore stage site data that R61
-forbids in the repository.
-Closure contract: First name one supported location and filename for a site overlay in the install
-runbooks (today they show an inline override fragment without prescribing a path, so no ignore rule
-can be targeted safely, and a wildcard broad enough to cover every valid Compose filename would hide
-tracked files). Then ignore exactly that path and the exported root CA, and prove both with
-`git check-ignore` plus a check that every tracked `infra/compose/compose.*.yml` stays tracked.
-Last reviewed: 2026-09-22
 
 ## RES-UNBOUND-SCOPE-TEMPLATE-ROLES
 
