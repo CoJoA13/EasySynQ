@@ -1965,7 +1965,8 @@ implementation prose.
    the safe direction for an append-only chain.
 5. **Credential-reset authority (extends R35 to a non-grant operation).** Resetting an existing
    identity's credential is an account-takeover capability, unlike creating a permission-less one.
-   A caller may reset another user's credential **only if the caller is system-tier — full stop**;
+   A caller may reset any existing user's credential, including their own,
+   **only if the caller is system-tier — full stop**;
    the target's own authority is never inspected. `user.create` alone is insufficient, because it is
    grantable independently through a per-user override. An earlier draft of this rule instead
    permitted the reset whenever the target held no *system-domain* permission — that form was
@@ -2066,7 +2067,8 @@ The owner selected one no-SMTP browser flow for every fresh installation.
    credential, bootstrap secret, claim marker, or Keycloak subject enters an audit payload.
 6. **Post-setup separation is unchanged.** `user.create` creates accounts, `user.update` edits them,
    `permission.grant` separately gates role assignment, and R64’s system-tier guard remains mandatory
-   for resetting another existing user’s credential. No new permission key is introduced.
+   for resetting every existing linked user’s credential, including the caller’s own. No new permission
+   key is introduced.
 7. **Install-path convergence.** New install paths create no fixed human Keycloak account and write no
    human password to a setup sheet. Internal Keycloak service credentials remain installation
    secrets. Existing `OPERATIONAL` and legitimately `IN_SETUP` installations do not re-enter
@@ -2332,9 +2334,11 @@ the timestamp behind it breaks silently under this change — no type error, no 
 register in the wrong order. Enumerating every `useOrgDate` consumer and proving none does that is a
 precondition of the convergence work, not a review comment on it.
 
-**Back-propagation:** `11-ui-ux-design-system.md` when its §3 rewrite lands (that document is
-separately known to be drifted — `RES-DOC11-TOKEN-DRIFT`), and every surface named by
-`RES-DATE-TIME-DISPLAY-CONVERGENCE`. `lib/time.ts` carries the rule at the source in both formatters.
+**Back-propagation:** [Doc 11 §3.1](11-ui-ux-design-system.md#31-typography) now records this display
+standard; its token reconciliation is recorded in
+[dated slice history](slice-history.md#doc-11-follows-implemented-design-tokens-2026-10-12-utc).
+Every surface named by `RES-DATE-TIME-DISPLAY-CONVERGENCE` still requires convergence.
+`lib/time.ts` carries the rule at the source in both formatters.
 
 Bumps the resolutions range **R1–R69 → R1–R70**.
 

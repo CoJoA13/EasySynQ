@@ -36,6 +36,7 @@ from ...domain.ingestion.rule_classifier import (
 from ...domain.ingestion.rule_pack import default_rule_pack
 from . import locks
 from . import repository as repo
+from .progress import PipelineProgressStopped, heartbeat_batch
 from .service import _fail_run, emit_import_event_system
 
 logger = logging.getLogger("easysynq.ingestion.classify")
@@ -114,21 +115,28 @@ async def run_classify(session: AsyncSession, run_id: uuid.UUID) -> None:
                     values=_to_values(result),
                 )
             await session.commit()
-            if token:
-                await locks.heartbeat(src_hash, token, ttl=settings.import_lock_ttl_seconds)
-            # Stop on ANY status change away from Classifying — a cancel, OR a reaper that FAILED a
-            # run whose lock lapsed mid-batch (don't keep writing to a no-longer-active run).
+            await heartbeat_batch(
+                session,
+                run_id,
+                source_root_hash=src_hash,
+                token=token,
+                expected_status=ImportRunStatus.CLASSIFYING,
+                ttl=settings.import_lock_ttl_seconds,
+            )
             if await repo.get_status(session, run_id) is not ImportRunStatus.CLASSIFYING:
-                if token:
-                    await locks.release(src_hash, token)
-                return
+                raise PipelineProgressStopped
 
         classify_counts = await repo.compute_classify_counts(session, run_id, version)
         final = await repo.get_run(session, run_id, for_update=True)
-        if final is None or final.status is not ImportRunStatus.CLASSIFYING:
-            await session.commit()  # a late cancel won the race — respect it
-            if final is not None and final.status is ImportRunStatus.CANCELLED and token:
-                await locks.release(src_hash, token)
+        if (
+            final is None
+            or final.status is not ImportRunStatus.CLASSIFYING
+            or final.source_root_hash != src_hash
+            or final.lock_token != token
+            or not token
+            or not await locks.is_owned(src_hash, token)
+        ):
+            await session.rollback()
             return
         final.status = ImportRunStatus.CLASSIFIED
         final.counts = {**(final.counts or {}), **classify_counts}
@@ -144,6 +152,8 @@ async def run_classify(session: AsyncSession, run_id: uuid.UUID) -> None:
         )
         await session.commit()
         _enqueue_dedup(run_id)  # chain to Stage 4 (lock still held)
+    except PipelineProgressStopped:
+        await session.rollback()
     except Exception as exc:
         await session.rollback()
         await _fail_run(session, run_id, repr(exc)[:500])
