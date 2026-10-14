@@ -4,6 +4,8 @@ and LSH candidate recall at the 0.85 threshold."""
 
 from __future__ import annotations
 
+import uuid
+
 import pytest
 
 from easysynq_api.domain.ingestion import minhash as mh
@@ -78,3 +80,71 @@ def test_near_dup_threshold_mirrors_settings_default() -> None:
     from easysynq_api.config import Settings
 
     assert Settings.model_fields["import_near_dup_threshold"].default == mh.NEAR_DUP_THRESHOLD
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        ("a", "b", "c", "d", "e"),
+        (1, 2, 3, 4, 5),
+        tuple(uuid.UUID(int=i) for i in range(1, 6)),
+        ((1,), (2,), (3,), (4,), (5,)),
+    ],
+    ids=["strings", "integers", "uuids", "tuples"],
+)
+def test_lsh_work_and_public_pairs_match_explicit_collision_oracle(keys) -> None:
+    """Dropping a band, adding cross-band/self pairs, or retaining duplicates breaks this oracle."""
+    a, b, c, d, _e = keys
+    sigs = {key: [value] * 128 for key, value in zip(keys, (10, 10, 20, 30, 40), strict=True)}
+    # A/B share every band; C joins their first band; C/D share only the second.
+    # E is a singleton in every band. Equal values in different bands cannot collide.
+    sigs[c][:4] = [10] * 4
+    sigs[d][4:8] = [20] * 4
+    expected = {frozenset((a, b)), frozenset((a, c)), frozenset((b, c)), frozenset((c, d))}
+
+    public = mh.lsh_candidate_pairs(sigs)
+    work = list(mh.iter_lsh_candidate_work(sigs))
+    attempts = [pair for pair in work if pair is not None]
+    assert isinstance(public, set)
+    assert public == set(attempts) == expected
+    assert work[:160] == [None] * 160  # 5 inputs * 32 completed bucket placements.
+    assert all(pair is not None for pair in work[160:])
+    assert len(attempts) == 35  # 32 A/B attempts plus A/C, B/C, C/D.
+    assert attempts.count(frozenset((a, b))) == 32
+    assert all(len(pair) == 2 for pair in attempts)
+
+
+@pytest.mark.parametrize("count,placements", [(0, 0), (1, 32), (8, 256), (9, 288)])
+def test_lsh_work_includes_bucket_placements_without_pairs(monkeypatch, count, placements) -> None:
+    """Singleton buckets are completed work even when no candidate can be emitted."""
+    sigs = {key: [key + 1] * 128 for key in range(count)}
+    band_keys = 0
+    original = mh._band_key
+
+    def observe(band):
+        nonlocal band_keys
+        band_keys += 1
+        return original(band)
+
+    monkeypatch.setattr(mh, "_band_key", observe)
+    observed = []
+    for marker in mh.iter_lsh_candidate_work(sigs):
+        assert marker is None
+        observed.append(band_keys)
+    assert observed == list(range(1, placements + 1))
+    assert mh.lsh_candidate_pairs(sigs) == set()
+
+
+def test_public_lsh_wrapper_consumes_shared_work_and_preserves_none_key(monkeypatch) -> None:
+    """A separate wrapper algorithm would ignore this shared producer and lose its membership."""
+    pair = frozenset((None, "key"))
+    sigs = {None: [1] * 128, "key": [1] * 128}
+
+    def work(actual):
+        assert actual is sigs
+        yield None
+        yield pair
+        yield pair
+
+    monkeypatch.setattr(mh, "iter_lsh_candidate_work", work)
+    assert mh.lsh_candidate_pairs(sigs) == {pair}

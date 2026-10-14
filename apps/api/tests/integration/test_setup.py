@@ -11,14 +11,16 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
+import json
 import shutil
 import tempfile
 import threading
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, TypedDict
 
+import httpx
 import pytest
 import redis.asyncio as aioredis
 from httpx import AsyncClient
@@ -41,6 +43,7 @@ from easysynq_api.services import backup as backup_service
 from easysynq_api.services.identity import provisioning as identity_provisioning
 from easysynq_api.services.keycloak_provisioning import (
     KeycloakConflict,
+    KeycloakProvisioningClient,
     KeycloakRejected,
     KeycloakUnavailable,
     UserLookup,
@@ -1793,6 +1796,345 @@ async def test_reliable_email_collision_retains_claim(
     cfg = await _config()
     assert cfg.bootstrap_admin_claim_id is not None
     assert cfg.bootstrap_admin_username == username
+
+
+@dataclass(slots=True)
+class _ProfileRejectionProvider:
+    create_status: int
+    secret: str
+    reread: str = "absent"
+    operations: list[tuple[str, str]] = field(default_factory=list)
+    rejected_payloads: list[dict[str, Any]] = field(default_factory=list)
+    accounts: dict[str, dict[str, Any]] = field(default_factory=dict)
+    reset_subjects: list[str] = field(default_factory=list)
+    private_detail: str = ""
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.method == "POST" and path.endswith("/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "synthetic-admin-token"})
+        if request.method == "GET" and path.endswith("/users/profile"):
+            return httpx.Response(
+                200,
+                json={
+                    "attributes": [{"name": name} for name in ("email", "firstName", "lastName")]
+                    + [
+                        {
+                            "name": "easysynqBootstrapClaim",
+                            "permissions": {"view": ["admin"], "edit": ["admin"]},
+                            "multivalued": False,
+                        }
+                    ]
+                },
+            )
+        if request.method == "GET" and path.endswith("/users"):
+            assert request.url.params["exact"] == "true"
+            username = request.url.params["username"]
+            self.operations.append(("lookup", username))
+            rejected = next((p for p in self.rejected_payloads if p["username"] == username), None)
+            if rejected is not None:
+                if self.reread == "outage":
+                    return httpx.Response(503, json={"errorMessage": self.private_detail})
+                if self.reread == "found":
+                    return httpx.Response(200, json=[{"id": "marker-bound-race", **rejected}])
+            return httpx.Response(
+                200, json=[self.accounts[username]] if username in self.accounts else []
+            )
+        if request.method == "POST" and path.endswith("/users"):
+            payload = json.loads(request.content)
+            username = payload["username"]
+            self.operations.append(("create", username))
+            if self.create_status != 201:
+                claim = payload["attributes"]["easysynqBootstrapClaim"][0]
+                assert claim and uuid.UUID(claim)
+                self.rejected_payloads.append(payload)
+                self.private_detail = (
+                    f"private provider detail claim={claim}; secret={self.secret}; "
+                    f"username={username}; email={payload.get('email')}"
+                )
+                return httpx.Response(
+                    self.create_status, json={"errorMessage": self.private_detail}
+                )
+            subject = f"created-{uuid.uuid4()}"
+            self.accounts[username] = {"id": subject, **payload}
+            return httpx.Response(
+                201, headers={"Location": f"http://kc/admin/realms/easysynq/users/{subject}"}
+            )
+        if request.method == "PUT" and path.endswith("/reset-password"):
+            subject = path.rsplit("/", 2)[-2]
+            self.operations.append(("reset", subject))
+            self.reset_subjects.append(subject)
+            return httpx.Response(204)
+        if "/users/" in path:
+            subject = path.rsplit("/", 1)[-1]
+            username = next(
+                (name for name, account in self.accounts.items() if account["id"] == subject),
+                None,
+            )
+            assert username is not None, f"unexpected subject read: {path}"
+            if request.method == "GET":
+                return httpx.Response(200, json=self.accounts[username])
+            if request.method == "PUT":
+                self.accounts[username] = json.loads(request.content)
+                return httpx.Response(204)
+        raise AssertionError(f"unexpected provider operation: {request.method} {request.url}")
+
+
+def _install_profile_rejection_provider(
+    monkeypatch: pytest.MonkeyPatch, provider: _ProfileRejectionProvider
+) -> None:
+    """Replace the autouse fake only here; execute the real provisioning client and callers."""
+    monkeypatch.setattr(
+        identity_provisioning,
+        "keycloak_client",
+        lambda: KeycloakProvisioningClient(
+            base_url="http://kc",
+            realm="easysynq",
+            admin_user="admin",
+            admin_password="synthetic-admin-secret",
+            _transport=httpx.MockTransport(provider.handle),
+        ),
+    )
+
+
+class _ProfileRejectionSnapshot(TypedDict):
+    users: set[uuid.UUID]
+    roles: set[uuid.UUID]
+    audits: set[int]
+    identity_audits: set[int]
+
+
+async def _profile_rejection_snapshot() -> _ProfileRejectionSnapshot:
+    async with get_sessionmaker()() as session:
+        return {
+            "users": set((await session.scalars(select(AppUser.id))).all()),
+            "roles": set((await session.scalars(select(RoleAssignment.id))).all()),
+            "audits": set((await session.scalars(select(AuditEvent.id))).all()),
+            "identity_audits": set(
+                (
+                    await session.scalars(
+                        select(AuditEvent.id).where(
+                            AuditEvent.event_type.in_(
+                                (
+                                    EventType.USER_CREATED,
+                                    EventType.ADMIN_BOOTSTRAPPED,
+                                    EventType.USER_CREDENTIAL_ISSUED,
+                                )
+                            )
+                        )
+                    )
+                ).all()
+            ),
+        }
+
+
+async def _assert_no_profile_rejection_writes(
+    before: _ProfileRejectionSnapshot, provider: _ProfileRejectionProvider
+) -> None:
+    after = await _profile_rejection_snapshot()
+    assert after["users"] == before["users"]
+    assert after["roles"] == before["roles"]
+    assert after["identity_audits"] == before["identity_audits"]
+    assert provider.accounts == {}
+    assert provider.reset_subjects == []
+    claim = provider.rejected_payloads[0]["attributes"]["easysynqBootstrapClaim"][0]
+    async with get_sessionmaker()() as session:
+        new_audits = (
+            await session.scalars(
+                select(AuditEvent).where(AuditEvent.id.in_(after["audits"] - before["audits"]))
+            )
+        ).all()
+    for event in new_audits:
+        body = str((event.before, event.after))
+        for private in (claim, provider.secret, provider.private_detail):
+            assert private not in body
+
+
+async def _assert_profile_rejection_locks_released() -> None:
+    from easysynq_api.services.authz.admin_guard import lock_admin_set
+
+    async def reacquire() -> None:
+        async with get_sessionmaker()() as session:
+            cfg = (
+                await session.execute(select(SystemConfig).with_for_update(nowait=True))
+            ).scalar_one()
+            await lock_admin_set(session, cfg.org_id)
+            await session.rollback()
+
+    await asyncio.wait_for(reacquire(), timeout=2)
+
+
+def _assert_profile_rejection_redacted(
+    response: httpx.Response, provider: _ProfileRejectionProvider, username: str, email: str
+) -> None:
+    claim = provider.rejected_payloads[0]["attributes"]["easysynqBootstrapClaim"][0]
+    assert "detail" not in response.json()
+    payload = provider.rejected_payloads[0]
+    for private in (
+        claim,
+        provider.secret,
+        provider.private_detail,
+        username,
+        email,
+        payload["firstName"],
+        payload["lastName"],
+    ):
+        assert private not in response.text
+    assert "temporary_password" not in response.json()
+
+
+@pytest.mark.parametrize("provider_status", [400, 422])
+async def test_provider_profile_rejection_releases_claim_and_corrected_identity(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_status: int,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("http-rejected")
+    email = "profile-rejected@example.local"
+    provider = _ProfileRejectionProvider(provider_status, secret)
+    _install_profile_rejection_provider(monkeypatch, provider)
+    before = await _profile_rejection_snapshot()
+
+    rejected = await _provision(app_client, secret, username, email=email)
+
+    assert rejected.status_code == 422, rejected.text
+    assert rejected.json()["code"] == "validation_error"
+    assert rejected.json()["title"] == "The identity provider rejected the administrator profile"
+    _assert_profile_rejection_redacted(rejected, provider, username, email)
+    assert provider.operations == [
+        ("lookup", username),
+        ("lookup", username),
+        ("create", username),
+        ("lookup", username),
+    ]
+    cfg = await _config()
+    assert cfg.setup_state is SetupState.UNINITIALIZED
+    assert cfg.bootstrap_admin_claim_id is None
+    assert cfg.bootstrap_admin_username is None
+    assert cfg.bootstrap_claimed_at is None
+    assert cfg.bootstrap_admin_user_id is None
+    assert cfg.bootstrap_credential_issued_at is None
+    assert cfg.bootstrap_credential_receipt_hash is None
+    assert cfg.bootstrap_consumed_at is None
+    await _assert_no_profile_rejection_writes(before, provider)
+    await _assert_profile_rejection_locks_released()
+
+    provider.create_status = 201
+    corrected_username = _sub("http-corrected")
+    corrected = await _provision(app_client, secret, corrected_username)
+
+    assert corrected.status_code == 201, corrected.text
+    cfg = await _config()
+    old_claim = provider.rejected_payloads[0]["attributes"]["easysynqBootstrapClaim"][0]
+    assert cfg.bootstrap_admin_claim_id is not None
+    assert str(cfg.bootstrap_admin_claim_id) != old_claim
+    assert cfg.bootstrap_admin_username == corrected_username
+    assert cfg.bootstrap_admin_user_id is not None
+    assert cfg.bootstrap_credential_issued_at is not None
+    assert cfg.bootstrap_credential_receipt_hash is not None
+    account = provider.accounts[corrected_username]
+    assert provider.reset_subjects == [account["id"]]
+    async with get_sessionmaker()() as session:
+        user = await session.get(AppUser, cfg.bootstrap_admin_user_id)
+        assert user is not None and user.keycloak_subject == account["id"]
+        grants = (
+            await session.scalars(
+                select(RoleAssignment)
+                .join(Role, Role.id == RoleAssignment.role_id)
+                .where(RoleAssignment.user_id == user.id, Role.name == _ADMIN)
+            )
+        ).all()
+        events = (
+            await session.scalars(select(AuditEvent).where(AuditEvent.object_id == user.id))
+        ).all()
+    assert len(grants) == 1
+    assert len(events) == 3
+    assert {event.event_type for event in events} == {
+        EventType.USER_CREATED,
+        EventType.ADMIN_BOOTSTRAPPED,
+        EventType.USER_CREDENTIAL_ISSUED,
+    }
+    assert corrected.json()["temporary_password"]
+    assert corrected.json()["temporary_password"] not in str([(e.before, e.after) for e in events])
+    after = await _profile_rejection_snapshot()
+    assert len(after["users"] - before["users"]) == 1
+    assert len(after["roles"] - before["roles"]) == 1
+
+
+@pytest.mark.parametrize("provider_status", [400, 422])
+@pytest.mark.parametrize("reread", ["found", "outage"])
+async def test_provider_profile_rejection_reread_retains_claim(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_status: int,
+    reread: str,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("http-reread")
+    email = "profile-reread@example.local"
+    provider = _ProfileRejectionProvider(provider_status, secret, reread)
+    _install_profile_rejection_provider(monkeypatch, provider)
+    before = await _profile_rejection_snapshot()
+
+    rejected = await _provision(app_client, secret, username, email=email)
+
+    assert rejected.status_code == (422 if reread == "found" else 502), rejected.text
+    assert rejected.json()["code"] == (
+        "validation_error" if reread == "found" else "keycloak_unavailable"
+    )
+    _assert_profile_rejection_redacted(rejected, provider, username, email)
+    assert provider.operations == [
+        ("lookup", username),
+        ("lookup", username),
+        ("create", username),
+        ("lookup", username),
+    ]
+    cfg = await _config()
+    claim = provider.rejected_payloads[0]["attributes"]["easysynqBootstrapClaim"][0]
+    assert str(cfg.bootstrap_admin_claim_id) == claim
+    assert cfg.bootstrap_admin_username == username
+    assert cfg.bootstrap_claimed_at is not None
+    assert cfg.setup_state is SetupState.UNINITIALIZED
+    assert cfg.bootstrap_admin_user_id is None
+    assert cfg.bootstrap_credential_issued_at is None
+    assert cfg.bootstrap_credential_receipt_hash is None
+    assert cfg.bootstrap_consumed_at is None
+    await _assert_no_profile_rejection_writes(before, provider)
+    await _assert_profile_rejection_locks_released()
+
+
+@pytest.mark.parametrize("provider_status", [401, 403])
+async def test_provider_admin_failure_retains_claim(
+    app_client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    provider_status: int,
+) -> None:
+    secret = await _reset_uninitialized()
+    username = _sub("http-admin-failure")
+    email = "profile-admin@example.local"
+    provider = _ProfileRejectionProvider(provider_status, secret)
+    _install_profile_rejection_provider(monkeypatch, provider)
+    before = await _profile_rejection_snapshot()
+
+    rejected = await _provision(app_client, secret, username, email=email)
+
+    assert rejected.status_code == 502, rejected.text
+    assert rejected.json()["code"] == "keycloak_unavailable"
+    _assert_profile_rejection_redacted(rejected, provider, username, email)
+    assert provider.operations == [("lookup", username), ("lookup", username), ("create", username)]
+    cfg = await _config()
+    claim = provider.rejected_payloads[0]["attributes"]["easysynqBootstrapClaim"][0]
+    assert str(cfg.bootstrap_admin_claim_id) == claim
+    assert cfg.bootstrap_admin_username == username
+    assert cfg.bootstrap_claimed_at is not None
+    assert cfg.setup_state is SetupState.UNINITIALIZED
+    assert cfg.bootstrap_admin_user_id is None
+    assert cfg.bootstrap_credential_issued_at is None
+    assert cfg.bootstrap_credential_receipt_hash is None
+    assert cfg.bootstrap_consumed_at is None
+    await _assert_no_profile_rejection_writes(before, provider)
+    await _assert_profile_rejection_locks_released()
 
 
 async def test_keycloak_rejection_detail_never_echoes_marker_or_profile(

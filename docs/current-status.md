@@ -475,7 +475,9 @@ breadcrumb and document-title map to one string per destination, which is the gu
 the breadcrumb disagree with the rail for a whole slice. And the risk-matrix legend is capped to the
 grid it keys.
 
-What remains deferred is [`RES-IP-REGISTER-COLUMN-JUMP`](open-residuals.md) (owner-deferred).
+The interested-parties column shift was owner-deferred at that walkthrough; the
+[2026-10-02 tested candidate](slice-history.md#interested-parties-columns-remain-stable-while-filtering-2026-10-02)
+records its local fix and closure evidence. CI and merge evidence remain pending.
 S-rulepack-audit-program closed the rule-pack half of the spelling standard and left a narrower
 predicate behind it; S-rulepack-approval-block has now closed that too, and opened nothing in its
 place, so the classifier carries no known spelling gap. S-ui-6 closed the CAPA board's
@@ -1196,9 +1198,9 @@ S-ui-5a hash by an authority-document spelling sweep, and is restored: `git show
 2626ba9:packages/contracts/.contract.lock` is `e66fa80c…`, and the lock's history shows `041da029…` first
 appearing at `030c89d`.)
 
-`docs/11-ui-ux-design-system.md` was not updated by this program and now disagrees with the shipped
-tokens on typography, accent, focus ring and shell metrics; that gap is recorded as
-`RES-DOC11-TOKEN-DRIFT` in [`open-residuals.md`](open-residuals.md).
+The August program left `docs/11-ui-ux-design-system.md` unchanged, with typography, accent,
+focus-ring and shell-metric drift from the shipped tokens. The later documentation correction is
+recorded in [slice history (2026-10-12)](slice-history.md#doc-11-follows-implemented-design-tokens-2026-10-12-utc).
 
 The integration and response-contract suites were NOT run locally for this program; their counts above
 are taken from that CI run rather than from a local execution, because the local Docker-backed fixtures
