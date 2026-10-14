@@ -11,7 +11,7 @@ import uuid
 from collections.abc import Sequence
 from typing import Any
 
-from sqlalchemy import Text, and_, cast, delete, false, func, or_, select, text
+from sqlalchemy import Text, and_, cast, delete, false, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1210,23 +1210,48 @@ async def max_commit_progress(session: AsyncSession, run_id: uuid.UUID) -> Any:
     ).scalar_one_or_none()
 
 
+async def record_batch_progress(
+    session: AsyncSession,
+    run_id: uuid.UUID,
+    *,
+    source_root_hash: str,
+    token: str,
+    expected_status: ImportRunStatus,
+) -> bool:
+    """Guarded, monotonic DB wall-clock update; the caller owns the transaction."""
+    result = await session.execute(
+        update(ImportRun)
+        .where(
+            ImportRun.id == run_id,
+            ImportRun.source_root_hash == source_root_hash,
+            ImportRun.lock_token == token,
+            ImportRun.status == expected_status,
+        )
+        .values(
+            last_batch_progress_at=func.greatest(
+                ImportRun.last_batch_progress_at, func.clock_timestamp()
+            )
+        )
+        .returning(ImportRun.id)
+        .execution_options(synchronize_session=False)
+    )
+    return result.scalar_one_or_none() is not None
+
+
 async def max_stage_progress(session: AsyncSession, run_id: uuid.UUID) -> Any:
-    """The newest STAGE row time for a run, or None before any stage row lands — the in-progress
-    reaper's progress-liveness signal, mirroring ``max_commit_progress``.
+    """Newest completed-batch watermark or legacy stage row time, or None before either.
 
-    The absolute backstop must NOT be anchored on the pipeline-start ``scan_started_at``: a large
-    import legitimately runs longer than the stall window, and anchoring on the start time FAILs it
-    mid-flight (and force-frees its lock) no matter how much progress it is making.
-
-    ⚠ Only scan/extract/classify are INCREMENTAL: ``import_file`` (scan), ``import_extract`` and
-    ``import_classification`` are written per batch, so a long run in those stages keeps advancing
-    this anchor. ``import_dupe_cluster`` and ``import_proposal_node`` are written ONCE at stage
-    COMPLETION (``replace_dedup_groups`` / ``replace_proposals``), so they mark a stage finishing —
-    they do NOT protect a long-running Deduping/Proposing computation, which still rides the last
-    classify row. The ~30-minute source-root lock TTL is the effective liveness signal there;
-    covering those stages properly needs a heartbeat-written progress stamp, not a completion
-    marker (deferred — see the PR discussion)."""
+    Legacy maxima remain evidence for old workers and rows predating the nullable watermark.
+    The watermark also covers replayed inventory and computation before atomic result writes.
+    """
     stamps = []
+    batch_at = (
+        await session.execute(
+            select(ImportRun.last_batch_progress_at).where(ImportRun.id == run_id)
+        )
+    ).scalar_one_or_none()
+    if batch_at is not None:
+        stamps.append(batch_at)
     for column, model in (
         (ImportFile.created_at, ImportFile),
         (ImportExtract.created_at, ImportExtract),

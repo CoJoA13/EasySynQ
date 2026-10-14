@@ -220,7 +220,7 @@ def require(
     return _dependency
 
 
-async def _is_system_tier(session: AsyncSession, granter: AppUser) -> bool:
+async def is_system_tier(session: AsyncSession, granter: AppUser) -> bool:
     """True iff the grantor holds an EFFECTIVE system-tier ``permission.grant`` — a
     non-``content_only`` ALLOW that survives the FULL PDP (scope + ABAC predicates + deny-wins)
     against ``ResourceContext.system()``. The QMS Owner's grant carries ``content_only`` (content
@@ -306,7 +306,7 @@ async def assert_can_grant(
         )
     if not target.is_system_domain:
         return  # CONTENT target — any permission.grant holder may grant it.
-    if not await _is_system_tier(session, granter):
+    if not await is_system_tier(session, granter):
         await _two_tier_deny(
             sink,
             granter,
@@ -324,7 +324,7 @@ async def assert_can_assign_role(
     system_keys = await role_system_domain_keys(session, role_id)
     if not system_keys:
         return
-    if not await _is_system_tier(session, granter):
+    if not await is_system_tier(session, granter):
         await _two_tier_deny(
             sink,
             granter,
@@ -347,7 +347,7 @@ async def assert_can_revoke_role(
     system_keys = await role_system_domain_keys(session, role_id)
     if not system_keys:
         return
-    if not await _is_system_tier(session, granter):
+    if not await is_system_tier(session, granter):
         await _two_tier_deny(
             sink,
             granter,
@@ -366,7 +366,7 @@ async def assert_can_delete_override(
     Denials are AUDITED via ``_two_tier_deny`` for the same reason as ``assert_can_revoke_role``."""
     if not permission.is_system_domain:
         return  # CONTENT override — any permission.grant holder may delete it.
-    if not await _is_system_tier(session, granter):
+    if not await is_system_tier(session, granter):
         await _two_tier_deny(
             sink,
             granter,
@@ -379,9 +379,9 @@ async def assert_can_delete_override(
 async def assert_can_reset_credential(
     session: AsyncSession, sink: AuthzAuditSink, caller: AppUser, target: AppUser
 ) -> None:
-    """Two-tier guard (R35/R64 rule 5) for a credential RESET: resetting ANOTHER user's Keycloak
-    credential always requires the caller to be system-tier — full stop, with NO inspection of the
-    target's own authority.
+    """Two-tier guard (R35/R64 rule 5) for every existing user's Keycloak credential RESET,
+    including the caller's own: the caller must always be system-tier, with NO inspection of the
+    target's authority.
 
     Resetting a credential is itself the account-takeover primitive: a fresh password lets the
     caller sign in AS the target (the realm enforces no MFA), regardless of what the target can
@@ -398,12 +398,13 @@ async def assert_can_reset_credential(
     is not) for the same reason as the sibling guards: the outer ``require("user.create")`` ALLOW
     is already logged, and a bare check+422 would leave no record of the blocked takeover attempt.
     """
-    if not await _is_system_tier(session, caller):
+    if not await is_system_tier(session, caller):
         await _two_tier_deny(
             sink,
             caller,
             f"user:{target.id}",
-            "credential reset for another user requires a system-tier caller",
+            "credential reset always requires a system-tier caller, "
+            "including for the caller's own account",
             permission_key="user.reset_credential",
         )
 

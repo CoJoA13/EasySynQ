@@ -188,29 +188,6 @@ and an optional read-only root filesystem for the application services, which ne
 inventory and is not done.
 Last reviewed: 2026-09-19
 
-## RES-IP-REGISTER-COLUMN-JUMP
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ui-5c, 2026-08-29 (owner-deferred at the S-ui-5 walkthrough close)
-Reason: The interested-parties register's columns change width when the filter selection changes, so
-rows appear to shift sideways between two views of the same data. The cause is
-`table-layout: auto` sizing each enum column to the widest value currently rendered: filtering to a
-subset removes the widest `Category`, `Influence`, `Interest` or `Status` value, the column shrinks,
-and every column after it moves. The known fix is `layout="fixed"` on the register's `Table` with
-pinned pixel widths on those four columns. The adversarial reviewer called pinned widths fragile —
-they rot the moment a label changes or a new enum value is added — and required that the widths be
-harvested LAST, because S-ui-5c's `white-space: nowrap` on `SortableTh` changed the header
-min-content of every register and any width measured before it is stale. The owner reviewed this
-against the other two walkthrough items and deferred it as the lowest-value of the three.
-Closure contract: Either harvest the post-S-ui-5c column widths in a real browser, pin them under
-`layout="fixed"`, and add a Playwright case to `apps/web/e2e/register-table-legibility.spec.ts` that
-measures one column's left edge in two filter states and fails when it moves; or establish that a
-min-width floor per enum column is stable enough without pinning exact widths, and prove that
-instead. jsdom cannot see either, so a Vitest assertion is not acceptable evidence. If neither is
-worth the fragility, record that the columns stay fluid and remove this record.
-Last reviewed: 2026-08-29
-
 ## RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER
 
 Status: OPEN
@@ -272,28 +249,6 @@ width where the contract expects one per face, and its per-section assertion fai
 contract for a section whose faces delegate to a frame is part of this record's work, not a surprise
 against it.
 Last reviewed: 2026-09-02 (third blocker closed by S-capa-width-railfoot-order)
-
-## RES-DOC11-TOKEN-DRIFT
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ui-1 to S-ui-3, 2026-08-29
-Reason: `docs/11-ui-ux-design-system.md` now contradicts the shipped design tokens on four points. It
-names Inter as the self-hosted sans and JetBrains Mono as the monospace, where the shipped stack is
-Archivo plus a system monospace; it gives the accent and the focus ring as `#2A6FDB`, where the
-shipped accent is the brand mark's teal and the focus ring is a solid teal token corrected for WCAG
-2.2 SC 1.4.11; and it states shell metrics of a 56px top bar and a 264px rail, where the shipped
-layout tokens are 58px and 244px and `AppShell` now reads them. The accent and focus-ring
-divergences predate this program, but were inert while nothing consumed the tokens; S-ui-1 is the
-slice that made them authoritative, so the divergence is now load-bearing rather than latent. The
-program plan schedules the correction under its final sweep slice, which has not shipped, and a
-deferral recorded only in a plan file is not in the live ledger this document owns.
-Closure contract: Bring doc 11 into agreement with `apps/web/src/theme/tokens.css` for typography,
-accent, focus ring and shell metrics, citing the token names rather than restating literal values so
-the two cannot drift again; or, if a value in doc 11 is the intended design and the token is wrong,
-change the token instead and prove the contrast gate still passes. Either way the fix must name
-which of the two documents is authoritative for a design value.
-Last reviewed: 2026-08-29
 
 ## RES-ARCHIVO-SYMBOL-GLYPHS
 
@@ -421,47 +376,6 @@ production build, the full Vitest suite and the Playwright browser job — on th
 the measured evidence. Do not disable or downgrade the lint job, pin a second compiler, or treat a
 passing type-check and build as closure while lint is skipped.
 Last reviewed: 2026-09-20
-
-## RES-TESTCONTAINERS-IMPORT-DEPRECATIONS
-
-Status: OPEN
-Owner: Project maintainer
-Source: [S-audit-required-witness-collection runtime evidence](slice-history.md#s-audit-required-witness-collection--fresh-bounded-traversal-diagnostics),
-2026-09-11
-Reason: `apps/api/tests/integration/conftest.py` still imports PostgreSQL, MinIO and Redis fixtures
-from deprecated `testcontainers.postgres`, `testcontainers.minio` and `testcontainers.redis` paths.
-The dated ten-case mandatory runtime evidence reports the three inherited deprecation warnings; there
-is no evidence that the required-witness collection branch introduced them.
-Closure contract: Migrate the three fixture imports to `testcontainers.community.postgres`,
-`testcontainers.community.minio` and `testcontainers.community.redis`, then verify the affected
-PostgreSQL, MinIO and Redis fixtures and mandatory runtime paths complete without those warnings.
-Do not suppress the warnings or treat an unaffected subset as closure evidence.
-Last reviewed: 2026-09-11
-
-## RES-INGEST-PROGRESS
-
-Status: OPEN
-Owner: Repository owner
-Source: Batch 10, PR [#367](https://github.com/CoJoA13/EasySynQ/pull/367)
-Reason: Ingestion reaper — long dedup/propose stages have no incremental progress signal.
-Closure contract: Add a heartbeat-written progress stamp that advances per batch, covering long
-dedup/propose computation and re-delivered scanning, with its required migration and focused reaper proof.
-Last reviewed: 2026-08-08
-
-`reap_stalled_runs`' backstop is anchored on `repo.max_stage_progress`, but only `import_file` (scan) /
-`import_extract` / `import_classification` are written **per batch**. `import_dupe_cluster` and
-`import_proposal_node` are written **once at stage completion** (`replace_dedup_groups` /
-`replace_proposals`), so a long-running `Deduping`/`Proposing` computation still rides the last classify
-row and could in principle be reaped while alive. Bounded in practice: the ~30-minute source-root lock TTL
-is the effective liveness signal against a 6-hour backstop, so lock-liveness protects a genuinely live
-worker first. **Closing it needs** a heartbeat-written progress stamp (a new column or a per-batch row
-write) + a migration — a slice, not a remediation fix. Raised by both Codex and diff-critic on #367;
-documented at `max_stage_progress`.
-
-⚠ Same root cause, also unclosed: a **re-delivered `Scanning` run** re-walks existing paths via
-`upsert_file`, whose conflict-update does NOT touch `created_at`, so the anchor does not advance on a
-replay either. Every one of these needs the same fix — a timestamp that advances per BATCH, not per
-first-insert or per stage-completion.
 
 ## RES-INGEST-PARTIAL-OPTIN
 
@@ -869,94 +783,6 @@ prevent. Prove the result with an executable assertion per changed surface, and 
 against the current output. `formatTimestamp`'s missing `timeZone` should be fixed first and can be
 proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02
-
-## RES-SITE-DATA-GUARD-GAPS
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #421](https://github.com/CoJoA13/EasySynQ/issues/421), a deferred review batch
-from 2026-08-03; verified against `3d8613a` on 2026-09-22.
-Reason: `scripts/check-no-site-data.sh` (the R61 mechanical backstop) still misses four shapes: IPv6
-addresses that begin with `::` compression (deliberately unmatched because Python slice syntax such
-as `a[::2]` has the same shape), textual lockfiles (skipped by the `\.lock$` exclusion), lowercase
-MD5 fingerprints (the pattern is uppercase-only), and file names beginning with `-` (most matchers
-pass the file list without a `--` separator).
-Closure contract: Close all four with a context-aware rule for leading `::` that keeps the slice
-false positive out, an evidence-backed lockfile policy, a case-insensitive fingerprint match, and
-`--` on every matcher. Prove each with a failing fixture in `scripts/tests/test-check-no-site-data.sh`
-and a clean run over the full tree.
-Last reviewed: 2026-09-22
-
-## RES-SITE-ARTIFACT-GITIGNORE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #423](https://github.com/CoJoA13/EasySynQ/issues/423) item 3, filed
-2026-08-03; items 1 and 2 were mooted when the deployment record they corrected was removed. Verified
-against `3d8613a` on 2026-09-22.
-Reason: The install runbooks tell operators to create site-specific Compose overlays and to export the
-installation root CA as `easysynq-root-ca.crt` inside the working tree, but `.gitignore` covers
-neither. A routine `git add -A` on an operator checkout can therefore stage site data that R61
-forbids in the repository.
-Closure contract: First name one supported location and filename for a site overlay in the install
-runbooks (today they show an inline override fragment without prescribing a path, so no ignore rule
-can be targeted safely, and a wildcard broad enough to cover every valid Compose filename would hide
-tracked files). Then ignore exactly that path and the exported root CA, and prove both with
-`git check-ignore` plus a check that every tracked `infra/compose/compose.*.yml` stays tracked.
-Last reviewed: 2026-09-22
-
-## RES-CREDENTIAL-RESET-R64-ALIGNMENT
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #430](https://github.com/CoJoA13/EasySynQ/issues/430), deferred from PR #429 on
-2026-08-04; the contract text (item 3) has since been aligned. Verified against `3d8613a` on 2026-09-22.
-Reason: R64 rule 5 requires a system-tier caller to reset another user's credential. The roster still
-offers "Issue new temp password" to any caller holding `user.create` (`UsersAdmin.tsx`), so a
-granular-override holder sees an action that always returns `422 two_tier_violation`. The PEP check
-in `services/authz/pep.py` is unconditional (no self exception), while R64 rule 5, its denial
-message and doc 07 §351 say "another user"; doc 07 then justifies system tier for "every reset", and
-the published contract describes the guard as unconditional. The authorities disagree, and choosing
-the weaker reading would change a security boundary.
-Closure contract: Gate the roster action on the same system-tier rule the server enforces, with a
-component test for a granular `user.create` holder. Keep the unconditional guard and correct R64
-rule 5, the denial text and doc 07 to say every reset needs system tier; a self-reset exception is
-out of scope for this record and needs its own owner-approved register amendment first.
-Last reviewed: 2026-09-22
-
-## RES-KEYCLOAK-ERROR-CLASSIFICATION
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #431](https://github.com/CoJoA13/EasySynQ/issues/431), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: `KeycloakProvisioningClient` turns every 4xx on create, including admin-credential 401/403,
-into `KeycloakRejected` (reported as invalid operator input), and turns a 404 from
-`set_temporary_password` into `KeycloakUnavailable` (reported as an outage). A stale identity link
-therefore reads as Keycloak being down, and a broken admin credential reads as a typo.
-Closure contract: Classify a missing subject distinctly, route 401/403 to the
-configuration/availability path, and unit-test each status class. Because no supported operation
-replaces a dead `keycloak_subject` today (`POST /users` creates a separate `app_user`, and the only
-user PATCH changes status), the closure must also either ship an audited relink operation for a
-stale subject, with authorization and a test, or return a response naming the documented manual
-recovery. An error class alone does not close this record.
-Last reviewed: 2026-09-22
-
-## RES-ROLE-PICKER-ROLE-READ
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #435](https://github.com/CoJoA13/EasySynQ/issues/435), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: The Create user role picker is gated on `permission.grant`, but its data comes from
-`GET /api/v1/roles`, which requires `role.read`. A granular-override caller without `role.read` sees
-an enabled, silently empty dropdown. The roster's Manage drawer (`UsersAdmin.tsx`) issues the same
-roles query unconditionally for a roster reader, so its "Assign a role" selector fails the same way. The seeded System Administrator holds all three keys, so a
-default install does not hit this.
-Closure contract: In both the Create user modal and the Manage drawer, include `role.read` in the
-role selector's gate or render the denied query as a calm no-access state (`forbidden` flag,
-`retry: false`), with a component test for the denied case on each surface.
-Last reviewed: 2026-09-22
 
 ## RES-UNBOUND-SCOPE-TEMPLATE-ROLES
 
