@@ -11,6 +11,35 @@ not deployed. See doc 03 §7 for sizing.
 > [install-ubuntu-server.md](install-ubuntu-server.md), which also covers the Windows-side AD DNS,
 > service account and GPO certificate trust. This runbook assumes those prerequisites are met.
 
+## Local installation artifacts
+
+Run these instructions from the repository root. Use `infra/compose/compose.site.yml` for
+reviewed local Compose customizations and root-level `easysynq-root-ca.crt` for the exported Caddy
+CA. Both paths are intentionally ignored by Git and remain operator-managed. Before authoring the
+overlay or exporting the CA, confirm the protection:
+
+```bash
+git check-ignore -v -- infra/compose/compose.site.yml easysynq-root-ca.crt
+```
+
+Expect two matches from the root `.gitignore`, with the exact patterns
+`/infra/compose/compose.site.yml` and `/easysynq-root-ca.crt`. Keep these files in the
+installation's controlled custody and carry them with any move of the deployment checkout.
+
+`install.sh` uses its own explicit Compose file list and does not load this optional overlay.
+To apply it in a manual Compose command, add `-f infra/compose/compose.site.yml` after all
+required `-f` flags and before the subcommand. Keep the base, selected sizing, and production
+files, plus the airgap/offline files and flags required by the installation route.
+
+For subsequent raw Compose operations, use the same file set in the
+[administrator's standard Compose context](../manuals/administrator-it-manual.md#3-standard-compose-context).
+The host helper `./scripts/easysynq` preserves the running deployment's file list for its supported
+one-off administration jobs.
+
+This supported filename does not authorize arbitrary overlay contents or overrides of existing
+security and support restrictions. Follow [security guidance](../12-security-and-audit.md) and
+the [site-data rule (R61)](../decisions-register.md); keep real installation records out of Git.
+
 ## Steps
 
 1. **DNS + firewall** — create the app's DNS record before installation. Allow inbound TCP
@@ -51,7 +80,9 @@ not deployed. See doc 03 §7 for sizing.
    bind-source paths from `infra/compose/`, regardless of where `.env` lives.
 
 3. **Trust the CA when using `--tls internal`.** Export Caddy's root certificate and distribute it
-   through the organization's trusted-root mechanism before workstation use:
+   through the organization's trusted-root mechanism before workstation use. The command writes
+   `easysynq-root-ca.crt` at the repository root; confirm its ignore protection and keep it under
+   operator custody as described in [Local installation artifacts](#local-installation-artifacts):
 
    ```bash
    docker compose --env-file .env \

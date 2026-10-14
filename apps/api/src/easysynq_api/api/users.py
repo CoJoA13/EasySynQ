@@ -53,6 +53,7 @@ from ..services.keycloak_provisioning import (
     KeycloakConflict,
     KeycloakNotConfigured,
     KeycloakRejected,
+    KeycloakSubjectMissing,
     KeycloakUnavailable,
 )
 
@@ -69,6 +70,17 @@ router = APIRouter(prefix="/api/v1", tags=["users"])
 _user_read = require("user.read")
 _user_create = require("user.create")
 _user_deactivate = require("user.deactivate")
+
+_KEYCLOAK_UNAVAILABLE_DETAIL = (
+    "Check Keycloak availability and the configured admin credentials and realm permissions. "
+    "Account details do not need to be changed for an admin-access failure."
+)
+_MISSING_SUBJECT_RECOVERY_DETAIL = (
+    "Verify that this install is using the correct Keycloak realm. If the linked account is "
+    "missing, follow Administrator & IT Manual §5.3.1, Missing linked sign-in account recovery: "
+    "create or link a verified replacement account, review its access, and disable the old user "
+    "while preserving its history. Retrying this password reset cannot repair the link."
+)
 
 
 def _rid() -> uuid.UUID | None:
@@ -237,10 +249,11 @@ async def _provision_user(
     The Keycloak calls are split across TWO try/except legs, one on each side of the commit — not
     one try spanning lookup through set-password — so ``user``/``subject`` are only ever read on the
     single fall-through path where both are already bound (every other branch raises first, so
-    neither name is ever actually unbound where it's used), and so a post-commit
-    ``KeycloakUnavailable`` gets its own detail: the account is real and just missing a credential,
-    and the fix is to reissue a password, never to retry create (it would only collide on the
-    username) and never to delete the Keycloak account.
+    neither name is ever actually unbound where it's used), and each post-commit failure identifies
+    its recovery. ``KeycloakSubjectMissing`` preserves the committed application user and directs
+    the operator to documented manual replacement recovery. Other ``KeycloakUnavailable`` failures
+    need availability or admin access repaired before reissuing a password. Neither recovery path
+    retries create or deletes the Keycloak account.
     """
     username = identity_provisioning.canonicalize_username(body.username)
     if not username:
@@ -320,9 +333,7 @@ async def _provision_user(
             )
             raise ProblemException(status=409, code=code, title=title) from exc
         except KeycloakRejected as exc:
-            # A 4xx other than 409: the dependency IS reachable and retrying the identical form
-            # cannot succeed (an invalid email, or a value the realm's user-profile validation
-            # refuses) — distinct from an outage, and actionable by the operator.
+            # Provider400/422 rejects submitted profile fields; other statuses need IT recovery.
             raise ProblemException(
                 status=422,
                 code="validation_error",
@@ -331,7 +342,10 @@ async def _provision_user(
             ) from exc
         except KeycloakUnavailable as exc:
             raise ProblemException(
-                status=502, code="keycloak_unavailable", title="Keycloak could not be reached"
+                status=502,
+                code="keycloak_unavailable",
+                title="Keycloak could not complete the request",
+                detail=_KEYCLOAK_UNAVAILABLE_DETAIL,
             ) from exc
 
         user = AppUser(
@@ -408,22 +422,32 @@ async def _provision_user(
                 ),
             ) from exc
 
-        # Only now does the account become usable. A failure here leaves a real app_user whose
-        # account has no credential — repaired by POST /users/{id}/temporary-password, never by
-        # retrying create (which would just collide on the now-existing username) and never by
-        # deleting the Keycloak account.
+        # A credential failure preserves the committed user. Missing subjects need the manual
+        # replacement path; other provider failures can be repaired by an explicit later reset.
         try:
             password = await identity_provisioning.issue_temporary_credential(
                 kc, subject=subject, username=username
             )
+        except KeycloakSubjectMissing as exc:
+            raise ProblemException(
+                status=409,
+                code="keycloak_subject_missing",
+                title="The linked sign-in account could not be found",
+                detail=(
+                    "The EasySynQ user was created, but no temporary password was set. "
+                    "Do not retry this create request. Reload the user list. "
+                    + _MISSING_SUBJECT_RECOVERY_DETAIL
+                ),
+            ) from exc
         except KeycloakUnavailable as exc:
             raise ProblemException(
                 status=502,
                 code="keycloak_unavailable",
                 title="User created but the temporary password could not be set",
                 detail=(
-                    "The Keycloak account and EasySynQ user were created, but Keycloak could not "
-                    "be reached to set the temporary password. Do not retry create — reissue a "
+                    "The Keycloak account and EasySynQ user were created, but the temporary "
+                    "password could not be set. Check Keycloak availability and configured admin "
+                    "access. Do not retry create — resolve the dependency failure, then reissue a "
                     "temporary password for this user instead."
                 ),
             ) from exc
@@ -622,9 +646,19 @@ async def issue_temporary_password(
             code="keycloak_not_configured",
             title="Keycloak admin access is not configured on this install",
         ) from exc
+    except KeycloakSubjectMissing as exc:
+        raise ProblemException(
+            status=409,
+            code="keycloak_subject_missing",
+            title="The linked sign-in account could not be found",
+            detail=_MISSING_SUBJECT_RECOVERY_DETAIL,
+        ) from exc
     except KeycloakUnavailable as exc:
         raise ProblemException(
-            status=502, code="keycloak_unavailable", title="Keycloak could not be reached"
+            status=502,
+            code="keycloak_unavailable",
+            title="Keycloak could not complete the request",
+            detail=_KEYCLOAK_UNAVAILABLE_DETAIL,
         ) from exc
 
     # Build the response before the try block so it can still be returned on failure.

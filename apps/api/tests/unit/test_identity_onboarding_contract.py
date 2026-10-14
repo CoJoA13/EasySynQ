@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from easysynq_api.api import users as users_api
+from easysynq_api.services.authz.pep import assert_can_reset_credential
 
 ROOT = Path(__file__).resolve().parents[4]
 OPENAPI = ROOT / "packages/contracts/openapi.yaml"
@@ -42,3 +43,48 @@ def test_existing_user_credential_reset_contract_is_unconditionally_system_tier(
 
     setup_guide = (ROOT / "docs/08-setup-and-onboarding.md").read_text(encoding="utf-8").lower()
     assert "| **reset** in manage | `user.create` + system tier |" in setup_guide
+
+
+def test_reset_authority_describes_every_existing_user_including_self() -> None:
+    register = (ROOT / "docs/decisions-register.md").read_text(encoding="utf-8")
+    r64 = register.split("### R64 —", 1)[1].split("### R65 —", 1)[0]
+    rule = r64.split("5. **Credential-reset authority", 1)[1].split("**No new permission key**", 1)[
+        0
+    ]
+    r66 = register.split("### R66 —", 1)[1].split("### R67 —", 1)[0]
+    post_setup = r66.split("6. **Post-setup separation", 1)[1].split("\n7. ", 1)[0]
+    post_setup = " ".join(post_setup.lower().replace("\u2019", "'").split())
+    model = (ROOT / "docs/07-authorization-model.md").read_text(encoding="utf-8")
+    reset_section = model.split("#### 4.3.1 Credential reset", 1)[1].split("\n###", 1)[0]
+    guard_doc = (inspect.getdoc(assert_can_reset_credential) or "").lower()
+
+    assert "any existing user's credential, including their own" in rule.lower()
+    assert "every existing linked user's credential reset, including the caller's own" in (
+        reset_section.lower()
+    )
+    assert "another user" not in rule.lower()
+    assert "another user" not in reset_section.lower()
+    assert "another user" not in guard_doc
+    assert "own" in guard_doc
+    assert (
+        "system-tier guard remains mandatory for resetting every existing linked user's "
+        "credential, including the caller's own"
+    ) in post_setup
+
+
+def test_self_permission_contract_requires_system_tier() -> None:
+    spec = yaml.safe_load(OPENAPI.read_text(encoding="utf-8"))
+    own_response = spec["paths"]["/me/permissions"]["get"]["responses"]["200"]
+    own_schema = own_response["content"]["application/json"]["schema"]
+    assert own_schema == {"$ref": "#/components/schemas/MyEffectivePermissions"}
+    schema = spec["components"]["schemas"]["MyEffectivePermissions"]
+    assert set(schema["required"]) == {"scope", "permissions", "system_tier"}
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["system_tier"]["type"] == "boolean"
+
+    admin_response = spec["paths"]["/users/{user_id}/effective-permissions"]["get"]["responses"][
+        "200"
+    ]
+    assert admin_response["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/EffectivePermissions"
+    }
