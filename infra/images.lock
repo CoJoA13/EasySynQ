@@ -32,7 +32,7 @@ caddy    caddy:2@sha256:13ba145cba2f3e28fa801994876e4c086d1b95d5aa2a520a734765ff
 renderer    gotenberg/gotenberg:8.37@sha256:f29984bd1e226bf1b93ba90af06000afa8b315853e99d27b9aaa41b93f15c769
 tika    apache/tika:3.3.1.0-full@sha256:d8e6ed96260ad89307a93195a1b856102987a818ac648502f8efbaf313d32470
 # mailpit: dev profile only (was :latest)
-# Digest verified 2026-10-14 by registry inspection plus a sha256 of the fetched OCI index bytes
-# (content-addressed match); NOT cross-checked by a local pull (no Docker daemon available).
-mailpit     axllent/mailpit:v1.31.3@sha256:ed9b00c609e77e99c79b93f1178255ebc271868920f2c69a8d166bd5634ed10d
+# Digest verified 2026-10-15 by registry inspection only (Docker-Content-Digest header); the byte
+# hash GET was rate-limited and no Docker daemon was available, so NOT cross-checked by a local pull.
+mailpit     axllent/mailpit:v1.31.4@sha256:b68349e3a014b90c5610bfb26b2ae36f3892d7b8cf25ee140c6c71c98d2fcf48
 # opensearch — intentionally OMITTED in MVP (R34); v1 drop-in via the Indexer interface.
