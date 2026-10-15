@@ -195,7 +195,9 @@ it("a ?risk= deep-link opens the detail drawer", async () => {
     route: "/risks?risk=ab000002-0002-0002-0002-000000000002",
   });
   const dialog = await screen.findByRole("dialog");
-  expect(within(dialog).getByText("Untrained operators on the new line")).toBeInTheDocument();
+  expect(
+    await within(dialog).findByText("Untrained operators on the new line"),
+  ).toBeInTheDocument();
 });
 
 it("opens the drawer from a row anchor", async () => {
