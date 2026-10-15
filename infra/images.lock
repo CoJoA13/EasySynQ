@@ -25,7 +25,9 @@ minio    ghcr.io/cojoa13/easysynq/minio:RELEASE.2024-09-13T20-26-02Z@sha256:efba
 # mc: minio-init one-shot (was :latest)
 mc    ghcr.io/cojoa13/easysynq/mc:RELEASE.2025-08-13T08-35-41Z@sha256:eb4ea9884b77704230e2423e9004d2fa738dc272876b9cc41a297d29443b8780
 redis    redis:8@sha256:298e5b3bc566bade82f46ad5511777a4a07a294097ce16ada2f6a42be5239df5
-keycloak    quay.io/keycloak/keycloak:26.7@sha256:82a77884f3af238beab1e7afd63b5f530e1b5c0590bd7aa60b40a40463e29b2c
+# keycloak 26.8 (2026-10-15): digest as resolved from quay.io by Dependabot (#633); the owner built and
+# exercised this pinned image locally. NOT re-resolved here (quay.io unreachable from this host).
+keycloak    quay.io/keycloak/keycloak:26.8@sha256:b0f60d489d51c5d113390bdf5461d4c06e6051be026c05549f2e1e10ec352bcc
 caddy    caddy:2@sha256:13ba145cba2f3e28fa801994876e4c086d1b95d5aa2a520a734765ffb6b12017
 renderer    gotenberg/gotenberg:8.37@sha256:f29984bd1e226bf1b93ba90af06000afa8b315853e99d27b9aaa41b93f15c769
 tika    apache/tika:3.3.1.0-full@sha256:d8e6ed96260ad89307a93195a1b856102987a818ac648502f8efbaf313d32470
