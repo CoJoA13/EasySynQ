@@ -9,7 +9,7 @@
     }
   },
   "devDependencies": {
-    "@redocly/cli": "2.59.0",
+    "@redocly/cli": "2.62.1",
     "openapi-typescript": "7.13.0"
   }
 }
