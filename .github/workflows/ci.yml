@@ -242,6 +242,12 @@ jobs:
               exit 1
             }
           done < <(bash scripts/app-images.sh)
+      # ubuntu-latest moved to 26.04 (system Python 3.14); with UV_PYTHON_DOWNLOADS=never, uv
+      # must find the pinned 3.12 on PATH, so provision it from apps/api/.python-version.
+      - name: install python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: apps/api/.python-version
       - name: install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
@@ -303,6 +309,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # ubuntu-latest moved to 26.04 (system Python 3.14); with UV_PYTHON_DOWNLOADS=never, uv
+      # must find the pinned 3.12 on PATH, so provision it from apps/api/.python-version.
+      - name: install python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: apps/api/.python-version
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
@@ -334,6 +346,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # ubuntu-latest moved to 26.04 (system Python 3.14); with UV_PYTHON_DOWNLOADS=never, uv
+      # must find the pinned 3.12 on PATH, so provision it from apps/api/.python-version.
+      - name: install python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: apps/api/.python-version
       - name: install uv
         uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
@@ -410,6 +428,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # ubuntu-latest moved to 26.04 (system Python 3.14); with UV_PYTHON_DOWNLOADS=never, uv
+      # must find the pinned 3.12 on PATH, so provision it from apps/api/.python-version.
+      - name: install python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: apps/api/.python-version
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
@@ -441,6 +465,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # ubuntu-latest moved to 26.04 (system Python 3.14); with UV_PYTHON_DOWNLOADS=never, uv
+      # must find the pinned 3.12 on PATH, so provision it from apps/api/.python-version.
+      - name: install python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: apps/api/.python-version
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
@@ -469,6 +499,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # ubuntu-latest moved to 26.04 (system Python 3.14); with UV_PYTHON_DOWNLOADS=never, uv
+      # must find the pinned 3.12 on PATH, so provision it from apps/api/.python-version.
+      - name: install python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: apps/api/.python-version
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
@@ -598,6 +634,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # ubuntu-latest moved to 26.04 (system Python 3.14); with UV_PYTHON_DOWNLOADS=never, uv
+      # must find the pinned 3.12 on PATH, so provision it from apps/api/.python-version.
+      - name: install python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version-file: apps/api/.python-version
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: ${{ env.UV_VERSION }}
