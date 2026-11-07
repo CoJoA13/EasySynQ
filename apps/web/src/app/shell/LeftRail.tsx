@@ -204,6 +204,18 @@ export function LeftRail() {
   const { can } = usePermissions();
   return (
     <Stack gap={4} p="sm">
+      {/* S-ui-redesign: the brand lives at the head of the rail (the Figma AppShell); the top bar
+          repeats it only below `md`, where the rail is collapsed behind the burger. Decorative —
+          the document title and the Home link already name the product. */}
+      <Group gap={10} px="xs" pt={4} pb="sm" wrap="nowrap" visibleFrom="md" aria-hidden="true">
+        <img src="/easysynq-mark-simple.svg" alt="" width={26} height={26} />
+        <Text fw={600} size="lg" lh={1}>
+          EasySyn
+          <Text span fw={600} size="lg" lh={1} c="var(--es-accent-text)">
+            Q
+          </Text>
+        </Text>
+      </Group>
       <NavLink
         styles={railLink}
         component={Link}
@@ -218,8 +230,8 @@ export function LeftRail() {
         // Drop a phase entirely when the caller can see no feature link under it.
         if (items.length === 0) return null;
         return (
-          <Box key={phase} mt={8} role="group" aria-label={`${phase} section`}>
-            <Group gap={8} px="xs" mb={2} wrap="nowrap">
+          <Box key={phase} mt={10} role="group" aria-label={`${phase} section`}>
+            <Group gap={8} px="xs" mb={4} wrap="nowrap">
               {/* Category marker only — the phase hue never carries a signal, so hiding it from AT
                   loses nothing; the phase name beside it is the accessible content. */}
               <Box
@@ -232,7 +244,7 @@ export function LeftRail() {
                   flexShrink: 0,
                 }}
               />
-              <Text size="xs" fw={700} c="dimmed" tt="uppercase">
+              <Text className="es-eyebrow" c="dimmed">
                 {phase} · {PHASE_CLAUSES[phase]}
               </Text>
             </Group>

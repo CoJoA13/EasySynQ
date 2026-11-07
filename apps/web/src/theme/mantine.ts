@@ -1,11 +1,20 @@
 import {
+  ActionIcon,
   Badge,
+  Button,
   createTheme,
   defaultVariantColorsResolver,
   Drawer,
   type MantineColorsTuple,
   Modal,
+  NavLink,
+  Paper,
   ScrollArea,
+  SegmentedControl,
+  Select,
+  Table,
+  Tabs,
+  TextInput,
   type VariantColorsResolver,
 } from "@mantine/core";
 import type { Tone } from "../lib/status";
@@ -192,7 +201,19 @@ export const theme = createTheme({
     // register's Table.ScrollContainer already scrolls — the tables are horizontally scrollable by
     // design, so growth is absorbed rather than clipped.
     Badge: Badge.extend({
-      styles: { root: { maxWidth: "none" }, label: { overflow: "visible" } },
+      styles: {
+        root: {
+          maxWidth: "none",
+          textTransform: "none",
+          letterSpacing: 0,
+          fontWeight: 500,
+          // Caption-size label on a 22px pill (the Figma badge); Mantine's own sm is a 10px shout.
+          fontSize: "var(--es-fs-caption)",
+          height: "1.375rem",
+          paddingInline: "0.5rem",
+        },
+        label: { overflow: "visible" },
+      },
     }),
     // Mantine's ScrollArea hides its scrollbar until hover (`type: "hover"`), and every register
     // table sits in a Table.ScrollContainer built on one. So a table wider than its viewport
@@ -202,5 +223,58 @@ export const theme = createTheme({
     // is exactly the failure: content is unreachable and nothing says so. `auto` shows the bar
     // whenever the content actually overflows, and nothing when it does not.
     ScrollArea: ScrollArea.extend({ defaultProps: { type: "auto" } }),
+
+    // ---- S-ui-redesign: the component defaults the Figma redesign settled on -------------------
+    // Every value below is an --es-* token so the dark scheme comes free (tokens.css re-keys them).
+    // Status pills read in sentence case: Mantine's default uppercase + tracking made a 13px badge
+    // read as a shout, and the glyph (not the casing) is the status's second channel.
+    // (The Badge entry above keeps `maxWidth: none`; it is merged here rather than duplicated.)
+    Button: Button.extend({
+      defaultProps: { radius: "sm" },
+      styles: { root: { fontWeight: 500 }, label: { fontWeight: 500 } },
+    }),
+    ActionIcon: ActionIcon.extend({ defaultProps: { radius: "sm" } }),
+    TextInput: TextInput.extend({ defaultProps: { radius: "sm" } }),
+    Select: Select.extend({ defaultProps: { radius: "sm" } }),
+    SegmentedControl: SegmentedControl.extend({ defaultProps: { radius: "sm" } }),
+    // Every bordered Paper is a card: surface fill, hairline border and the soft elevation step.
+    // `withBorder` stays the caller's choice, so inset/tinted Papers (scorecard bands) are untouched.
+    Paper: Paper.extend({
+      styles: (_theme, props) =>
+        props.withBorder
+          ? {
+              root: {
+                background: props.bg ? undefined : "var(--es-surface)",
+                borderColor: "var(--es-border)",
+                boxShadow: "var(--es-shadow-sm)",
+              },
+            }
+          : {},
+    }),
+    // Register tables: a recessed header strip and hairline rows. The header typography lives in
+    // index.css (scoped to `thead`, so row-header `<th scope="row">` cells in key-value tables are
+    // left alone — the styles API cannot express that scope).
+    Table: Table.extend({
+      defaultProps: {
+        borderColor: "var(--es-border)",
+        highlightOnHoverColor: "var(--es-surface-2)",
+        stripedColor: "var(--es-surface-2)",
+      },
+    }),
+    // Sub-register tab strips (CAPA, Audits, Drift) and the document-detail tabs: 14px/500 labels
+    // with the accent underline, on the hairline rule.
+    Tabs: Tabs.extend({
+      styles: {
+        list: { borderColor: "var(--es-border)" },
+        tab: { fontWeight: 500, paddingInline: 4, marginInlineEnd: 16 },
+      },
+    }),
+    // The rail: a quiet row that fills with the accent tint when active (Figma NavItem).
+    NavLink: NavLink.extend({
+      styles: {
+        root: { borderRadius: "var(--es-radius-md)", paddingInline: 10 },
+        label: { fontSize: "var(--es-fs-small)", fontWeight: 500 },
+      },
+    }),
   },
 });

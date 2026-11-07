@@ -41,6 +41,16 @@ import { InterestedPartyDrawer } from "./InterestedPartyDrawer";
 import { NewPartyModal } from "./NewPartyModal";
 import { RegisterLifecyclePanel } from "./RegisterLifecyclePanel";
 
+// S-ui-redesign page anatomy: the PDCA phase and clause range as the eyebrow, and one sentence on
+// what the register is for. Shared by the loaded, forbidden and error branches so the page names
+// itself the same way whatever it can show.
+const HEADER = {
+  title: "Interested parties",
+  eyebrow: "Plan · Cl 4.2",
+  description:
+    "Who has a stake in the QMS, what they need and expect, and how much influence they carry.",
+} as const;
+
 const SORT_KEYS = ["party_type", "influence", "status", "reviewed"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
@@ -151,7 +161,7 @@ export function InterestedPartiesRegisterPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Interested parties" />
+        <RegisterPageHeader {...HEADER} />
         <NoAccessState message="You don't have access to the Interested Parties register." />
       </Container>
     );
@@ -159,7 +169,7 @@ export function InterestedPartiesRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Interested parties" />
+        <RegisterPageHeader {...HEADER} />
         <ErrorState
           title="Couldn't load the interested-parties register"
           message="Something went wrong. Please try again."
@@ -179,10 +189,11 @@ export function InterestedPartiesRegisterPage() {
   return (
     <Container size="lg" py="md">
       <RegisterPageHeader
-        title="Interested parties"
-        actions={headEditable && canManage && (
-          <Button onClick={() => setCreateOpen(true)}>New party</Button>
-        )}
+        {...HEADER}
+        actions={
+          headEditable &&
+          canManage && <Button onClick={() => setCreateOpen(true)}>New party</Button>
+        }
         updatedAt={dataUpdatedAt}
       />
       {banner && (

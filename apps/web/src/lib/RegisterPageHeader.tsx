@@ -1,4 +1,4 @@
-import { Box, Group, Title } from "@mantine/core";
+import { Box, Group, Text, Title } from "@mantine/core";
 import type { ReactNode } from "react";
 import { AsOf } from "./AsOf";
 
@@ -31,14 +31,25 @@ import { AsOf } from "./AsOf";
 // they pass nothing, and AsOf renders nothing for a null/undefined/0 stamp, so the absent case
 // needs no branch here. (features/audits/ProgramPage.tsx is the one hand-rolled register header
 // left in the tree — it needs `size="h3"` and no stamp, which this API already supports.)
+//
+// S-ui-redesign adds the page anatomy the Figma redesign settled on: an optional EYEBROW (the PDCA
+// phase and clause range, e.g. "Do · Cl 7.5") above the title row and an optional DESCRIPTION (one
+// sentence on what the page is for) below it. Both are SIBLINGS of the title row inside the
+// wrapper, never children of it: e2e/register-header-geometry.spec.ts reads the h1's parentElement
+// as "the row" and pins its child count to exactly 1 (denied) or 2 (granted). Keeping the row
+// `[h1, actions]` is what lets eleven registers adopt the anatomy without touching that spec.
 export function RegisterPageHeader({
   title,
-  size = "h2",
+  size = "h1",
+  eyebrow,
+  description,
   actions,
   updatedAt,
 }: {
   title: ReactNode;
-  size?: "h2" | "h3";
+  size?: "h1" | "h2" | "h3";
+  eyebrow?: ReactNode;
+  description?: ReactNode;
   actions?: ReactNode;
   updatedAt?: number | null;
 }) {
@@ -48,12 +59,22 @@ export function RegisterPageHeader({
   // row, a table) sat flush against the stamp with no separation at all. One block, one gap below.
   return (
     <Box mb="md">
-      <Group justify="space-between">
+      {eyebrow ? (
+        <Text className="es-eyebrow" c="var(--es-accent-text)" mb={6}>
+          {eyebrow}
+        </Text>
+      ) : null}
+      <Group justify="space-between" align="flex-start" wrap="wrap" gap="sm">
         <Title order={1} size={size}>
           {title}
         </Title>
         {actions}
       </Group>
+      {description ? (
+        <Text c="var(--es-text-2)" mt={4} maw="72ch">
+          {description}
+        </Text>
+      ) : null}
       <AsOf at={updatedAt} />
     </Box>
   );

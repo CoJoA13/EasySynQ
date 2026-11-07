@@ -1,11 +1,4 @@
-import {
-  Anchor,
-  Box,
-  Button,
-  Container,
-  Select,
-  Table,
-} from "@mantine/core";
+import { Anchor, Box, Button, Container, Select, Table } from "@mantine/core";
 import { useOrgDate } from "../../app/shell/useOrgDate";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -28,6 +21,16 @@ import { DCR_STATES, dcrStateLabel } from "./dcrState";
 import { CHANGE_TYPE_LABEL, REASON_LABEL, SIGNIFICANCE_LABEL } from "./labels";
 import { useDcrs } from "./hooks";
 import { RaiseDcrModal } from "./RaiseDcrModal";
+
+// S-ui-redesign page anatomy: the PDCA phase and clause range as the eyebrow, and one sentence on
+// what the register is for. Shared by the loaded, forbidden and error branches so the page names
+// itself the same way whatever it can show.
+const HEADER = {
+  title: "Change requests",
+  eyebrow: "Act · Cl 8.5.6",
+  description:
+    "Document change requests from raise to implementation, with impact assessment and approval routing.",
+} as const;
 
 const SORT_KEYS = [
   "identifier",
@@ -120,7 +123,7 @@ export function DcrsRegisterPage() {
   if (forbidden) {
     return (
       <Container size="xl" py="md">
-        <RegisterPageHeader title="Change requests" />
+        <RegisterPageHeader {...HEADER} />
         <NoAccessState message="You don't have access to the change-request register. It's available to roles holding the change-request read permission." />
       </Container>
     );
@@ -135,7 +138,7 @@ export function DcrsRegisterPage() {
   if (isError) {
     return (
       <Container size="xl" py="md">
-        <RegisterPageHeader title="Change requests" />
+        <RegisterPageHeader {...HEADER} />
         <ErrorState title="Couldn't load change requests" onRetry={() => refetch()} />
       </Container>
     );
@@ -144,8 +147,10 @@ export function DcrsRegisterPage() {
   return (
     <Container size="xl" py="md">
       <RegisterPageHeader
-        title="Change requests"
-        actions={can("changeRequest.create") && <Button onClick={() => setRaising(true)}>Raise DCR</Button>}
+        {...HEADER}
+        actions={
+          can("changeRequest.create") && <Button onClick={() => setRaising(true)}>Raise DCR</Button>
+        }
         updatedAt={dataUpdatedAt}
       />
 

@@ -12,6 +12,55 @@ body {
   color: var(--es-text);
 }
 
+/* --- S-ui-redesign page anatomy ---------------------------------------------------------------
+   The eyebrow: a small tracked uppercase label above a page or card title (the PDCA phase and
+   clause range on registers, the section name on cards). One class, used by RegisterPageHeader and
+   the rail's group headers, so the two never drift. Colour is the caller's: accent-text on a page,
+   muted on the rail. */
+.es-eyebrow {
+  font-size: var(--es-fs-caption);
+  line-height: var(--es-lh-caption);
+  font-weight: var(--es-fw-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Register tables (every Mantine Table, scoped to the column-header row only, so a
+   `<th scope="row">` in a key-value table keeps its body typography). The header strip is the
+   recessed surface; the labels are the eyebrow treatment in muted text. */
+.mantine-Table-thead .mantine-Table-th {
+  background: var(--es-surface-2);
+  color: var(--es-text-muted);
+  font-size: var(--es-fs-caption);
+  line-height: var(--es-lh-caption);
+  font-weight: var(--es-fw-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* A register table is a card: Table.ScrollContainer (one per register, pinned by
+   responsiveRegisterContract.test.ts) is the thing to dress, so every register inherits the frame
+   without a page edit and no second element sits between the container and its table. */
+.mantine-Table-scrollContainer {
+  background: var(--es-surface);
+  border: 1px solid var(--es-border);
+  border-radius: var(--es-radius-md);
+  box-shadow: var(--es-shadow-sm);
+}
+
+/* Active rail entry: accent tint + accent text, matching the Figma NavItem. Mantine paints the
+   active NavLink with its `light` variant of the primary colour; the token pair is what the dark
+   scheme re-keys. */
+.mantine-NavLink-root[data-active] {
+  background: var(--es-accent-soft);
+  color: var(--es-accent-text);
+}
+.mantine-NavLink-root[data-active] .mantine-NavLink-label,
+.mantine-NavLink-root[data-active] .mantine-NavLink-section {
+  color: var(--es-accent-text);
+}
+
 /* Visible, non-obscured focus ring (WCAG 2.2 — DP-7). */
 :focus-visible {
   outline: none;

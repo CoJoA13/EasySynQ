@@ -36,6 +36,16 @@ import { RiskDetailDrawer } from "./RiskDetailDrawer";
 import { NewRiskModal } from "./NewRiskModal";
 import { RegisterLifecyclePanel } from "./RegisterLifecyclePanel";
 
+// S-ui-redesign page anatomy: the PDCA phase and clause range as the eyebrow, and one sentence on
+// what the register is for. Shared by the loaded, forbidden and error branches so the page names
+// itself the same way whatever it can show.
+const HEADER = {
+  title: "Risk & opportunity register",
+  eyebrow: "Plan · Cl 6.1",
+  description:
+    "Risks and opportunities scored by likelihood and severity, with treatments and linked corrective actions.",
+} as const;
+
 const SORT_KEYS = ["rating", "band", "type"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
@@ -148,7 +158,7 @@ export function RisksRegisterPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Risk & opportunity register" />
+        <RegisterPageHeader {...HEADER} />
         <NoAccessState message="You don't have access to the risk & opportunity register." />
       </Container>
     );
@@ -156,7 +166,7 @@ export function RisksRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Risk & opportunity register" />
+        <RegisterPageHeader {...HEADER} />
         <ErrorState
           title="Couldn't load the risk & opportunity register"
           message="Something went wrong. Please try again."
@@ -176,8 +186,10 @@ export function RisksRegisterPage() {
   return (
     <Container size="lg" py="md">
       <RegisterPageHeader
-        title="Risk & opportunity register"
-        actions={headEditable && canCreate && <Button onClick={() => setCreateOpen(true)}>New risk</Button>}
+        {...HEADER}
+        actions={
+          headEditable && canCreate && <Button onClick={() => setCreateOpen(true)}>New risk</Button>
+        }
         updatedAt={dataUpdatedAt}
       />
       {/* The date window only. This page already renders a "Type" control, and a duplicate

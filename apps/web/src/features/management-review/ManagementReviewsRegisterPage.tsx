@@ -1,13 +1,4 @@
-import {
-  Alert,
-  Anchor,
-  Box,
-  Button,
-  Container,
-  Group,
-  Table,
-  Text,
-} from "@mantine/core";
+import { Alert, Anchor, Box, Button, Container, Group, Table, Text } from "@mantine/core";
 import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { usePermissions } from "../../app/shell/usePermissions";
@@ -22,6 +13,16 @@ import { useRowKeyboardNav } from "../../lib/useRowKeyboardNav";
 import { StateBadge } from "../document/StateBadge";
 import { useMgmtReviews } from "./hooks";
 import { NewManagementReviewModal } from "./NewManagementReviewModal";
+
+// S-ui-redesign page anatomy: the PDCA phase and clause range as the eyebrow, and one sentence on
+// what the register is for. Shared by the loaded, forbidden and error branches so the page names
+// itself the same way whatever it can show.
+const HEADER = {
+  title: "Management reviews",
+  eyebrow: "Check · Cl 9.3",
+  description:
+    "Top-management reviews of the QMS: compiled inputs (9.3.2), recorded outputs (9.3.3) and tracked actions.",
+} as const;
 
 const SORT_KEYS = ["identifier", "title", "period", "review_date", "status"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
@@ -79,7 +80,7 @@ export function ManagementReviewsRegisterPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Management reviews" />
+        <RegisterPageHeader {...HEADER} />
         <NoAccessState message="You don't have access to Management Reviews. It's available to the Quality Manager." />
       </Container>
     );
@@ -87,7 +88,7 @@ export function ManagementReviewsRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Management reviews" />
+        <RegisterPageHeader {...HEADER} />
         <ErrorState title="Couldn't load management reviews" onRetry={() => refetch()} />
       </Container>
     );
@@ -102,10 +103,12 @@ export function ManagementReviewsRegisterPage() {
   return (
     <Container size="lg" py="md">
       <RegisterPageHeader
-        title="Management reviews"
-        actions={can("mgmtReview.create") && (
-          <Button onClick={() => setCreateOpen(true)}>New management review</Button>
-        )}
+        {...HEADER}
+        actions={
+          can("mgmtReview.create") && (
+            <Button onClick={() => setCreateOpen(true)}>New management review</Button>
+          )
+        }
         updatedAt={dataUpdatedAt}
       />
       {data.data.length === 0 ? (

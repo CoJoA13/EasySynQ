@@ -580,3 +580,37 @@ test("the shell takes its dimensions from the layout tokens, not literals", () =
   expect(shellVars).not.toMatch(/--app-shell-header-height:\s*(60px|3\.75rem)/);
   expect(shellVars).not.toMatch(/--app-shell-navbar-width:\s*(256px|16rem)/);
 });
+
+// The `alt` layout stacks the open mobile navbar above the header, so the burger that opened it is
+// covered (Codex P1 on #673). The navbar must therefore be closable from inside itself, and must
+// close when a destination is chosen. The toggle reports its state through `aria-expanded`.
+test("mobile navigation can be closed from inside the navbar and closes on navigation", async () => {
+  const user = userEvent.setup();
+  renderWithProviders(
+    <Routes>
+      <Route element={<AppShell />}>
+        <Route path="library" element={<h1>Library here</h1>} />
+        <Route path="tasks" element={<h1>Tasks here</h1>} />
+      </Route>
+    </Routes>,
+    { route: "/library" },
+  );
+  const burger = screen.getByRole("button", { name: "Toggle navigation" });
+  expect(burger).toHaveAttribute("aria-expanded", "false");
+
+  await user.click(burger);
+  expect(burger).toHaveAttribute("aria-expanded", "true");
+  await user.click(screen.getByRole("button", { name: "Close navigation" }));
+  expect(burger).toHaveAttribute("aria-expanded", "false");
+
+  await user.click(burger);
+  expect(burger).toHaveAttribute("aria-expanded", "true");
+  await user.keyboard("{Escape}");
+  expect(burger).toHaveAttribute("aria-expanded", "false");
+
+  await user.click(burger);
+  expect(burger).toHaveAttribute("aria-expanded", "true");
+  await user.click(screen.getByRole("link", { name: /^Review and approve/ }));
+  await screen.findByRole("heading", { name: "Tasks here" });
+  await waitFor(() => expect(burger).toHaveAttribute("aria-expanded", "false"));
+});

@@ -1,18 +1,18 @@
 import {
   Anchor,
-  Box,
   Button,
   Grid,
   Group,
+  Paper,
   SegmentedControl,
   Stack,
   Table,
   Text,
-  Title,
 } from "@mantine/core";
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ClauseBadge } from "../../lib/ClauseBadge";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import { getUniqueSearchParam } from "../../lib/effectiveView";
 import { SkeletonList } from "../../lib/states";
 import { useDocumentTypes } from "../../app/shell/useDocumentTypes";
@@ -129,44 +129,54 @@ export function LibraryPage() {
 
   return (
     <Stack gap="md">
-      <Group justify="space-between" align="flex-end">
-        <div>
-          <Title order={1}>Document Library</Title>
-          <Text size="sm" c="dimmed">
-            {isLoading
-              ? "Loading…"
-              : `Showing ${rows.length}${hasMore ? "+" : ""} document${rows.length === 1 ? "" : "s"}`}
-          </Text>
-        </div>
-        <Group gap="sm">
-          {can("document.create") && (
-            <Button component={Link} to="/library/new" size="sm">
+      {/* S-ui-redesign page anatomy: eyebrow (phase · clause), title, one-line purpose, the single
+          primary action top-right. The result count and the density control sit in the toolbar
+          row beside the facets, where they describe the table they govern. */}
+      <RegisterPageHeader
+        eyebrow="Do · Cl 7.5 · Documented information"
+        title="Document Library"
+        description="Controlled documents governed by clause 7.5 — the current revision, its state and who owns it."
+        actions={
+          can("document.create") && (
+            <Button component={Link} to="/library/new">
               New document
             </Button>
-          )}
-          <SegmentedControl
-            size="xs"
-            aria-label="Row density"
-            value={density}
-            onChange={(v) => setDensity(v as "comfortable" | "compact")}
-            data={[
-              { label: "Comfortable", value: "comfortable" },
-              { label: "Compact", value: "compact" },
-            ]}
-          />
-        </Group>
-      </Group>
+          )
+        }
+      />
 
       <Grid gutter="md">
         <Grid.Col span={{ base: 12, md: 3 }}>
-          <Box component="aside" aria-label="Clause spine">
+          <Paper withBorder p="sm" component="aside" aria-label="Clause spine">
+            <Text className="es-eyebrow" c="dimmed" px="xs" pb="xs">
+              Clause spine
+            </Text>
             <ClauseTree selected={uf.clause} onSelect={(c) => patchFilters({ clause: c })} />
-          </Box>
+          </Paper>
         </Grid.Col>
 
         <Grid.Col span={{ base: 12, md: 9 }}>
           <Stack gap="md">
-            <FacetBar value={uf} onChange={patchFilters} onClear={clearFilters} />
+            <Group justify="space-between" align="flex-end" wrap="wrap" gap="sm">
+              <FacetBar value={uf} onChange={patchFilters} onClear={clearFilters} />
+              <Group gap="sm" wrap="nowrap">
+                <Text size="sm" c="dimmed" aria-live="polite">
+                  {isLoading
+                    ? "Loading…"
+                    : `Showing ${rows.length}${hasMore ? "+" : ""} document${rows.length === 1 ? "" : "s"}`}
+                </Text>
+                <SegmentedControl
+                  size="xs"
+                  aria-label="Row density"
+                  value={density}
+                  onChange={(v) => setDensity(v as "comfortable" | "compact")}
+                  data={[
+                    { label: "Comfortable", value: "comfortable" },
+                    { label: "Compact", value: "compact" },
+                  ]}
+                />
+              </Group>
+            </Group>
 
             {isError && <Text c="red">Could not load documents.</Text>}
 
@@ -214,7 +224,7 @@ export function LibraryPage() {
                             onClick={() => openDetail(d.id)}
                             aria-label={`Open ${d.identifier}: ${d.title}`}
                           >
-                            <Text span ff="monospace" size="sm">
+                            <Text span ff="monospace" size="sm" fw={500}>
                               {d.identifier}
                             </Text>
                           </Anchor>

@@ -1,10 +1,11 @@
-import { Stack, Table, Text, Title } from "@mantine/core";
+import { Stack, Table, Text } from "@mantine/core";
 import { useMemo } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { useMe } from "../../app/shell/useMe";
 import { ApiError } from "../../lib/api";
 import { getUniqueSearchParam } from "../../lib/effectiveView";
 import { humanizeStageKey, humanizeToken } from "../../lib/labels";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 import { RegisterToolbar, SortableTh } from "../../lib/RegisterToolbar";
 import { sortRows, useDebouncedSearch, useTableSort } from "../../lib/registerControls";
 import { EmptyState, LoadingState } from "../../lib/states";
@@ -92,9 +93,11 @@ function GeneralTasksInbox() {
 
   return (
     <Stack gap="md">
-      <Title order={1} size="h2">
-        Review and approve
-      </Title>
+      <RegisterPageHeader
+        eyebrow="Do · Review and approve"
+        title="Review and approve"
+        description="Approvals, reviews, acknowledgements and commitments waiting on you — ordered by due date."
+      />
       {total === 0 ? (
         <EmptyState message="No tasks in your queue." />
       ) : (

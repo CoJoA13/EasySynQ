@@ -1,5 +1,6 @@
-import { AppShell as MantineAppShell, ScrollArea } from "@mantine/core";
+import { AppShell as MantineAppShell, CloseButton, Group, ScrollArea, Text } from "@mantine/core";
 import { useDisclosure, useHotkeys } from "@mantine/hooks";
+import { useEffect } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { ApplicationErrorBoundary } from "../errors/ApplicationErrorBoundary";
 import { NotFoundPage } from "../errors/NotFoundPage";
@@ -18,7 +19,7 @@ export interface AppShellProps {
 }
 
 export function AppShell({ notFound = false }: AppShellProps) {
-  const [navOpened, { toggle: toggleNav }] = useDisclosure(false);
+  const [navOpened, { toggle: toggleNav, close: closeNav }] = useDisclosure(false);
   const [searchOpened, { open: openSearch, close: closeSearch }] = useDisclosure(false);
   const { pathname, search } = useLocation();
   const routeResetKey = classifyEffectiveView(pathname, new URLSearchParams(search)).recoveryKey;
@@ -26,19 +27,44 @@ export function AppShell({ notFound = false }: AppShellProps) {
   // typing (the default ignore-list covers INPUT/TEXTAREA/SELECT). Hence two separate bindings.
   useHotkeys([["mod+K", openSearch]], []);
   useHotkeys([["/", openSearch]]);
+  // In the `alt` layout the open mobile navbar is full-width, 100dvh and stacked ABOVE the header,
+  // so it covers the burger that opened it (Codex P1 on #673). The navbar therefore carries its own
+  // close control below `md`, closes itself when a destination is chosen, and closes on Escape.
+  useEffect(() => {
+    closeNav();
+  }, [pathname, closeNav]);
+  useEffect(() => {
+    if (!navOpened) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeNav();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [navOpened, closeNav]);
   return (
     // Shell dimensions come from the layout tokens, not literals. tokens.css is the single source
     // for both Mantine and Tailwind, and these two ramps existed with ZERO readers before S-ui-1.
     // Mantine's rem() passes a bare `var(...)` through untouched (it only converts numbers and
     // px/number-like strings), so the custom property reaches --app-shell-header-height verbatim.
     <MantineAppShell
+      // `alt`: the rail runs the full viewport height and the top bar sits beside it, so the brand
+      // at the head of the rail is the top-left anchor (the Figma AppShell) instead of hanging
+      // under a full-width header.
+      layout="alt"
       header={{ height: "var(--es-topbar-h)" }}
       navbar={{
         width: "var(--es-sidebar-w)",
         breakpoint: "md",
         collapsed: { mobile: !navOpened },
       }}
-      padding="md"
+      padding="lg"
+      // S-ui-redesign: the three shell regions take their own surfaces — a white rail and top bar on
+      // the paper-toned page ground — so the chrome reads as chrome. Tokens, so dark comes free.
+      styles={{
+        header: { background: "var(--es-surface)", borderColor: "var(--es-border)" },
+        navbar: { background: "var(--es-sidebar)", borderColor: "var(--es-border)" },
+        main: { background: "var(--es-bg)" },
+      }}
     >
       {/* Skip-link: zIndex above the Mantine header (z-index 100) so keyboard focus isn't
           obscured by the sticky header (WCAG 2.2 Focus Not Obscured). */}
@@ -63,6 +89,21 @@ export function AppShell({ notFound = false }: AppShellProps) {
         <TopBar navOpened={navOpened} onToggleNav={toggleNav} onOpenSearch={openSearch} />
       </MantineAppShell.Header>
       <MantineAppShell.Navbar>
+        <MantineAppShell.Section hiddenFrom="md" px="sm" pt="sm">
+          <Group justify="space-between" wrap="nowrap">
+            <Group gap="xs" wrap="nowrap">
+              <img
+                src="/easysynq-mark-simple.svg"
+                alt=""
+                aria-hidden="true"
+                width={22}
+                height={22}
+              />
+              <Text fw={700}>EasySynQ</Text>
+            </Group>
+            <CloseButton aria-label="Close navigation" onClick={closeNav} />
+          </Group>
+        </MantineAppShell.Section>
         {/* The rail outgrew short viewports (nav items accrue per register slice) — without a
             scrollable section the overflow is simply clipped and unreachable. */}
         <MantineAppShell.Section grow component={ScrollArea}>

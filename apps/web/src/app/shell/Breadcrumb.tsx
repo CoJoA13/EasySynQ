@@ -103,7 +103,7 @@ export function Breadcrumb({ notFound = false }: BreadcrumbProps) {
   });
   if (notFound) {
     return (
-      <Breadcrumbs aria-label="Breadcrumb" separator={<BreadcrumbSeparator />}>
+      <Breadcrumbs aria-label="Breadcrumb" mb="md" separator={<BreadcrumbSeparator />}>
         <Anchor component={Link} to="/">
           Home
         </Anchor>
@@ -130,7 +130,7 @@ export function Breadcrumb({ notFound = false }: BreadcrumbProps) {
     }),
   ];
   return (
-    <Breadcrumbs aria-label="Breadcrumb" separator={<BreadcrumbSeparator />}>
+    <Breadcrumbs aria-label="Breadcrumb" mb="md" separator={<BreadcrumbSeparator />}>
       {crumbs.map((c, i) =>
         i === crumbs.length - 1 || !c.linkable ? (
           <Text key={`${i}-${c.to}`} c={i === crumbs.length - 1 ? "dimmed" : undefined}>

@@ -40,6 +40,15 @@ import { useProcesses } from "../objectives/hooks";
 import { useCapas } from "./hooks";
 import { RaiseCapaModal } from "./RaiseCapaModal";
 
+// S-ui-redesign page anatomy: the PDCA phase and clause range as the eyebrow, and one sentence on
+// what the register is for. Shared by the loaded, forbidden and error branches so the page names
+// itself the same way whatever it can show.
+const HEADER = {
+  title: "Nonconformity and CAPA",
+  eyebrow: "Act · Cl 10.2",
+  description: "Nonconformities and corrective actions from raise to closed-loop verification.",
+} as const;
+
 const TERMINAL: CapaCloseState[] = ["Closed", "Rejected"];
 
 export function CapaBoardPage() {
@@ -109,7 +118,7 @@ export function CapaBoardPage() {
   if (forbidden) {
     return (
       <Container size="xl" py="md">
-        <RegisterPageHeader title="Nonconformity and CAPA" />
+        <RegisterPageHeader {...HEADER} />
         <NoAccessState
           message={
             <>
@@ -131,7 +140,7 @@ export function CapaBoardPage() {
   if (isError) {
     return (
       <Container size="xl" py="md">
-        <RegisterPageHeader title="Nonconformity and CAPA" />
+        <RegisterPageHeader {...HEADER} />
         <ErrorState title="Couldn't load CAPAs" onRetry={() => refetch()} />
       </Container>
     );
@@ -160,7 +169,7 @@ export function CapaBoardPage() {
   return (
     <Container size="xl" py="md">
       <RegisterPageHeader
-        title="Nonconformity and CAPA"
+        {...HEADER}
         actions={
           <Group gap="sm">
             {canRaiseCapa && <Button onClick={() => setRaiseOpen(true)}>Raise CAPA</Button>}

@@ -1,12 +1,4 @@
-import {
-  Badge,
-  Button,
-  Container,
-  Group,
-  Stack,
-  Table,
-  Text,
-} from "@mantine/core";
+import { Badge, Button, Container, Group, Stack, Table, Text } from "@mantine/core";
 import { useOrgDate } from "../../app/shell/useOrgDate";
 import { useState } from "react";
 import { usePermissions } from "../../app/shell/usePermissions";
@@ -19,6 +11,16 @@ import { useNcrs } from "./hooks";
 import { DISPOSITION_LABEL, NCR_SOURCE_LABEL } from "./intake";
 import { NcrForm } from "./NcrForm";
 import { SeverityBadge } from "./SeverityBadge";
+
+// S-ui-redesign page anatomy: the PDCA phase and clause range as the eyebrow, and one sentence on
+// what the register is for. Shared by the loaded, forbidden and error branches so the page names
+// itself the same way whatever it can show.
+const HEADER = {
+  title: "Nonconforming Output (NCR)",
+  eyebrow: "Act · Cl 8.7",
+  description:
+    "Control of nonconforming output: identify, contain, and record the disposition decision.",
+} as const;
 
 // Resolve a disposition authorizer's id → display name, degrading to a short id when the directory
 // isn't loaded/permitted (the CapaTimeline `actorLabel` pattern — the table is the only NCR surface,
@@ -38,7 +40,7 @@ export function NcrsPage() {
   if (forbidden) {
     return (
       <Container size="xl" py="md">
-        <RegisterPageHeader title="Nonconforming Output (NCR)" size="h3" />
+        <RegisterPageHeader {...HEADER} size="h3" />
         <NoAccessState
           message={
             <>
@@ -60,7 +62,7 @@ export function NcrsPage() {
   if (isError) {
     return (
       <Container size="xl" py="md">
-        <RegisterPageHeader title="Nonconforming Output (NCR)" size="h3" />
+        <RegisterPageHeader {...HEADER} size="h3" />
         <ErrorState title="Couldn't load NCRs" onRetry={() => refetch()} />
       </Container>
     );
@@ -70,7 +72,7 @@ export function NcrsPage() {
   return (
     <Container size="xl" py="md">
       <RegisterPageHeader
-        title="Nonconforming Output (NCR)"
+        {...HEADER}
         size="h3"
         actions={can("ncr.create") && <Button onClick={() => setFormOpen(true)}>Raise NCR</Button>}
         updatedAt={dataUpdatedAt}
