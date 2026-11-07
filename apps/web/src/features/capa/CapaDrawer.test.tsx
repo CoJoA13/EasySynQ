@@ -133,8 +133,9 @@ describe("Target completion / overdue", () => {
 
     const { rerender } = renderWithProviders(<CapaDrawer capaId={capaId1} onClose={vi.fn()} />);
     // First CAPA: input should be seeded with its date
-    await screen.findByText("Target completion");
-    expect(screen.getByLabelText("Set target date")).toHaveValue("2026-07-15");
+    // The field is gated on the permissions query, which resolves independently of the CAPA
+    // read, so wait for the field itself rather than for the section heading.
+    expect(await screen.findByLabelText("Set target date")).toHaveValue("2026-07-15");
 
     // Switch to second CAPA: input must reset to the second CAPA's date (not stay stale)
     rerender(<CapaDrawer capaId={capaId2} onClose={vi.fn()} />);
@@ -156,9 +157,9 @@ describe("Target completion / overdue", () => {
     renderWithProviders(
       <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
     );
-    await screen.findByText("Target completion");
-    // The TextInput for setting the date and a Save button must appear
-    expect(screen.getByLabelText("Set target date")).toBeInTheDocument();
+    // The TextInput for setting the date and a Save button must appear (the field is gated on
+    // the permissions query, which resolves independently of the CAPA read).
+    expect(await screen.findByLabelText("Set target date")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Save/ })).toBeInTheDocument();
   });
 
@@ -243,9 +244,9 @@ describe("Target completion / overdue", () => {
       <CapaDrawer capaId="ca000001-0001-0001-0001-000000000001" onClose={vi.fn()} />,
     );
 
-    // Wait for the input to be seeded with the CAPA's current target date.
-    await screen.findByText("Target completion");
-    expect(screen.getByLabelText("Set target date")).toHaveValue(DATE);
+    // Wait for the input to be seeded with the CAPA's current target date (the field is gated on
+    // the permissions query, which resolves independently of the CAPA read).
+    expect(await screen.findByLabelText("Set target date")).toHaveValue(DATE);
 
     // Save with the unchanged date. With the old code, onSuccess blanked the input here.
     await u.click(screen.getByRole("button", { name: /Save/ }));
