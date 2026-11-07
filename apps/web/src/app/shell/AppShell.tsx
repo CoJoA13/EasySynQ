@@ -32,13 +32,24 @@ export function AppShell({ notFound = false }: AppShellProps) {
     // Mantine's rem() passes a bare `var(...)` through untouched (it only converts numbers and
     // px/number-like strings), so the custom property reaches --app-shell-header-height verbatim.
     <MantineAppShell
+      // `alt`: the rail runs the full viewport height and the top bar sits beside it, so the brand
+      // at the head of the rail is the top-left anchor (the Figma AppShell) instead of hanging
+      // under a full-width header.
+      layout="alt"
       header={{ height: "var(--es-topbar-h)" }}
       navbar={{
         width: "var(--es-sidebar-w)",
         breakpoint: "md",
         collapsed: { mobile: !navOpened },
       }}
-      padding="md"
+      padding="lg"
+      // S-ui-redesign: the three shell regions take their own surfaces — a white rail and top bar on
+      // the paper-toned page ground — so the chrome reads as chrome. Tokens, so dark comes free.
+      styles={{
+        header: { background: "var(--es-surface)", borderColor: "var(--es-border)" },
+        navbar: { background: "var(--es-sidebar)", borderColor: "var(--es-border)" },
+        main: { background: "var(--es-bg)" },
+      }}
     >
       {/* Skip-link: zIndex above the Mantine header (z-index 100) so keyboard focus isn't
           obscured by the sticky header (WCAG 2.2 Focus Not Obscured). */}

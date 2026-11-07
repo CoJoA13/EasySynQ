@@ -70,3 +70,35 @@ it("renders no freshness stamp when none is supplied", () => {
   renderHeader({ title: "Audit program" });
   expect(within(screen.getByTestId("wrap")).queryByText(/Updated/)).toBeNull();
 });
+
+// The redesign's page anatomy: an eyebrow ABOVE the title row and a description BELOW it. Both are
+// siblings of the title row, never children of it — e2e/register-header-geometry.spec.ts reads the
+// h1's parentElement as "the row" and pins its child count to exactly 1 (denied) or 2 (granted), so
+// the row must stay `[h1, actions]` whatever else the header grows.
+it("renders eyebrow and description outside the title row", () => {
+  renderHeader({
+    title: "Document Library",
+    eyebrow: "Do · Documented information",
+    description: "Controlled documents governed by clause 7.5.",
+    actions: <Button>New document</Button>,
+  });
+  const heading = screen.getByRole("heading", { level: 1, name: "Document Library" });
+  const row = heading.parentElement!;
+  expect(row.children).toHaveLength(2);
+  const eyebrow = screen.getByText("Do · Documented information");
+  const description = screen.getByText("Controlled documents governed by clause 7.5.");
+  expect(row.contains(eyebrow)).toBe(false);
+  expect(row.contains(description)).toBe(false);
+  // Reading order: eyebrow, then the title row, then the description.
+  expect(eyebrow.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(
+    heading.compareDocumentPosition(description) & Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+});
+
+it("renders no eyebrow or description chrome when neither is supplied", () => {
+  renderHeader({ title: "Audit program" });
+  const wrap = screen.getByTestId("wrap").firstElementChild!;
+  // Exactly the title row (AsOf renders null for no stamp).
+  expect(wrap.children).toHaveLength(1);
+});
