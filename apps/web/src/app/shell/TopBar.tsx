@@ -33,6 +33,7 @@ export function TopBar({
           hiddenFrom="md"
           size="sm"
           aria-label="Toggle navigation"
+          aria-expanded={navOpened}
         />
         {/* S-ui-redesign: the brand moved to the head of the rail; it stays here only while the rail
             is collapsed behind the burger (below `md`), so the product is still named on a phone. */}
