@@ -51,6 +51,10 @@ class BackupPolicy(Base):
         DateTime(timezone=True), nullable=True
     )
     last_restore_test_result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Success and handled failure consume an attempt; hard pre-commit crashes do not.
+    last_scheduled_attempt_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime.datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

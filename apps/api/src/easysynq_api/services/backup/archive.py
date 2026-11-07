@@ -7,9 +7,9 @@ A backup archive (manifest v2, S11) is a ``tar`` containing the custom-format ``
 §337; plus per-table row counts for the restore triad and the ``legs`` presence markers) + the
 optional legs ``realm.json`` / ``config.json`` / ``audit_checkpoint.json``. With a configured key,
 the durable on-disk archive is AES-256-GCM encrypted to ``…tar.enc`` (``crypto.py``); without one it
-is a plaintext ``.tar`` and omits secret-bearing legs. The restore-into-scratch DRILL always stays
-plaintext-internal. Each on-disk artifact has a sibling ``.sha256`` over its bytes. Blob
-*bytes* remain only in the configured source object store; the archive merely references them.
+is a plaintext ``.tar`` and omits secret-bearing legs. The restore-into-scratch DRILL requires a key
+and writes only ciphertext to its destination. Each artifact has a sibling ``.sha256`` checksum.
+Blob *bytes* remain in the configured source object store; the archive merely references them.
 """
 
 from __future__ import annotations

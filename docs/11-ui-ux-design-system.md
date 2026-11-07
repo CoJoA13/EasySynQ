@@ -8,6 +8,13 @@ This section specifies the **complete user-experience layer** of EasySynQ: the d
 > authorized Effective-document metadata rather than Records, people, commands, body text, or
 > OpenSearch facets, and Records/Retention and Evidence Packs have no dedicated management routes.
 
+**Authority.** Binding product decisions live in the [Decisions Register](decisions-register.md)
+and [owner-approved slice designs](superpowers/specs/), as defined by [AGENTS.md](../AGENTS.md).
+For implemented typography, color, focus, and shell token values,
+[`tokens.css`](../apps/web/src/theme/tokens.css) is the source of truth. This document explains
+token roles and UX targets; implemented values are referenced by token name. Consumers determine
+which tokens a surface actually uses.
+
 ---
 
 ## 1. Design Principles
@@ -34,6 +41,10 @@ These ten principles are the rubric every screen is measured against. They are o
 EasySynQ navigation is the **three lenses over one QMS** made concrete. There is exactly one persistent application shell; lenses are routes within it, not separate apps.
 
 ### 2.1 Application shell (layout regions)
+
+The sketch and region table describe the target shell. The current
+[`AppShell`](../apps/web/src/app/shell/AppShell.tsx) uses Mantine's `md` breakpoint with a toggled
+mobile navbar; the collapsed icon rail remains a target. See §3.3 for implemented sizing sources.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
@@ -108,47 +119,91 @@ only, as described in the implementation-status note and User Manual.
 
 ## 3. Visual Design Language
 
-The aesthetic target is **clinical-calm**: lots of quiet neutral space, a single restrained accent, and color reserved almost entirely for *meaning* (status), not decoration. Tokens are expressed as **CSS variables** consumed by both Tailwind (utility layer) and Mantine (theme object), so a single source drives both and re-theming (or a future multi-standard skin) is a token change, not a rebuild.
+The aesthetic target is **clinical-calm**: lots of quiet neutral space, a single restrained accent,
+and color reserved almost entirely for *meaning* (status), not decoration. Under the [authority
+rule above](#uiux--design-system), [`tokens.css`](../apps/web/src/theme/tokens.css) defines implemented
+CSS custom properties. [Tailwind](../apps/web/tailwind.config.ts) references the font families and
+selected color roles; [Mantine](../apps/web/src/theme/mantine.ts) maps typography and other scales
+to tokens, while its component brand colors use a separate teal ramp and `autoContrast`.
 
 ### 3.1 Typography
 
-A single, highly legible sans (Inter, self-hosted — no outbound font fetch, honoring the no-telemetry posture) plus a monospace (JetBrains Mono) for identifiers, diffs, hashes, and code.
+The sans family is Archivo through `--es-font-sans`, following the [owner-selected August
+direction](superpowers/plans/2026-08-29-s-ui-signal-board.md#3-typography--archivo-self-hosted).
+[`fonts.css`](../apps/web/src/theme/fonts.css) declares variable latin and latin-ext faces served
+from the same origin with `font-display: swap`. Font delivery must remain same-origin, with no
+outbound font fetch. Monospace uses the system stack through `--es-font-mono` for identifiers,
+diffs, hashes, and code.
 
-| Token | rem / px (base 16) | Weight | Line height | Use |
-|---|---|---|---|---|
-| `font-display` | 2.0 rem / 32 | 600 | 1.2 | Page titles (one per screen) |
-| `font-h1` | 1.5 rem / 24 | 600 | 1.25 | Section headers |
-| `font-h2` | 1.25 rem / 20 | 600 | 1.3 | Card / panel titles |
-| `font-h3` | 1.0625 rem / 17 | 600 | 1.4 | Sub-headers, drawer titles |
-| `font-body` | 1.0 rem / 16 | 400 | 1.5 | Default body text |
-| `font-body-sm` | 0.875 rem / 14 | 400 | 1.45 | Secondary text, table cells (comfortable) |
-| `font-caption` | 0.8125 rem / 13 | 500 | 1.4 | Metadata, timestamps, helper text |
-| `font-overline` | 0.6875 rem / 11 | 600 | 1.3 | Eyebrow labels (UPPERCASE, +0.06em tracking), e.g., clause chips |
-| `font-mono` | 0.875 rem / 14 | 400 | 1.5 | `SOP-PUR-002`, SHA-256, diff text |
+The seven typography roles reference the declared size, weight, and leading properties:
 
-Rules: body never below 14 px; identifiers always monospace so doc codes are scannable; max line length ~75ch for prose blocks (clause text, change reasons).
+| Role / use | Size | Weight | Leading |
+|---|---|---|---|
+| Display — page titles (one per screen) | `--es-fs-display` | `--es-fw-display` | `--es-lh-display` |
+| H1 — section headers | `--es-fs-h1` | `--es-fw-h1` | `--es-lh-h1` |
+| H2 — card / panel titles | `--es-fs-h2` | `--es-fw-h2` | `--es-lh-h2` |
+| H3 — subheaders, drawer titles | `--es-fs-h3` | `--es-fw-h3` | `--es-lh-h3` |
+| Body — default body text | `--es-fs-body` | `--es-fw-body` | `--es-lh-body` |
+| Small — secondary text, table cells | `--es-fs-small` | `--es-fw-small` | `--es-lh-small` |
+| Caption — metadata, timestamps, helper text | `--es-fs-caption` | `--es-fw-caption` | `--es-lh-caption` |
+
+Size and explicit leading are paired rem values, so they scale with the reader's browser font
+size. In [`mantine.ts`](../apps/web/src/theme/mantine.ts), the `xs`, `sm`, `md`, `lg`, and `xl`
+font-size keys map to small, body, h3, h2, and h1 respectively. Their inherited line-height scale
+uses the corresponding unitless `--es-lhr-small`, `--es-lhr-body`, `--es-lhr-h3`, `--es-lhr-h2`,
+and `--es-lhr-h1` ratios; headings use explicit size/leading pairs. Monospace is a family choice,
+with size chosen by role. Use body, small, and caption roles for their respective purposes;
+identifiers stay monospace for scanning, and prose blocks (clause text, change reasons) aim for
+a maximum measure of about 75ch.
+
+**Date/time display standard ([R70](decisions-register.md#r70--dates-render-as-a-six-digit-us-monthdayyear-and-times-are-24-hour--2026-09-02)).**
+User-facing dates use zero-padded `MM/DD/YY`; times use 24-hour format with midnight `00:00` and
+no meridiem. Both resolve in the organization timezone. This governs display only; machine
+timestamps retain their wire format. Convergence of existing surfaces remains tracked in
+[`RES-DATE-TIME-DISPLAY-CONVERGENCE`](open-residuals.md#res-date-time-display-convergence), so
+this standard is not a claim that every current surface conforms.
 
 ### 3.2 Color system
 
-Two complete themes (**light** and **dark**) generated from the same token names; the renderer chooses by `data-theme` plus `prefers-color-scheme`. All pairings below meet **WCAG 2.2 AA** (≥ 4.5:1 for text, ≥ 3:1 for large text and UI boundaries).
+Light and dark schemes use independently keyed values under Mantine's
+`data-mantine-color-scheme` attribute in [`tokens.css`](../apps/web/src/theme/tokens.css).
+[R69](decisions-register.md#r69--the-interface-colour-scheme-is-an-account-preference-auto-stays-selectable-and-the-rail-foot-clock-reads-org-time--2026-08-31)
+makes the account preference authoritative, with `localStorage` as the pre-authentication cache;
+`AUTO` follows the operating system. The
+[`preference hook`](../apps/web/src/app/shell/useColorSchemePreference.ts) reconciles those stores.
+WCAG 2.2 AA remains the requirement. [`contrast.test.ts`](../apps/web/src/theme/contrast.test.ts)
+guards its checked text/surface, tint, accent-fill, and painted-focus pairs in both schemes;
+it does not certify every possible pairing or make borders and disabled controls normal-text roles.
 
-**Neutral & brand ramp (light theme shown; dark inverts L\*):**
+**Neutral & brand roles:**
 
-| Token | Light | Role |
-|---|---|---|
-| `--bg-canvas` | `#F7F8FA` | App background (calm off-white) |
-| `--bg-surface` | `#FFFFFF` | Cards, panels |
-| `--bg-sunken` | `#EEF0F4` | Wells, table header, code blocks |
-| `--border-subtle` | `#E2E5EB` | Hairlines |
-| `--border-strong` | `#C4C9D4` | Inputs, focus container |
-| `--text-primary` | `#1A1D23` | Primary text (15.8:1 on surface) |
-| `--text-secondary` | `#5A6172` | Secondary text (7.0:1) |
-| `--text-tertiary` | `#8A91A0` | Disabled/placeholder (meets 3:1 non-text only) |
-| `--accent` | `#2A6FDB` | Single brand accent (primary actions, links, active nav) |
-| `--accent-hover` | `#1F58B5` | Accent hover/active |
-| `--focus-ring` | `#2A6FDB` @ 3px, 2px offset | Focus indicator (never removed) |
+| Token | Role |
+|---|---|
+| `--es-bg` | App background |
+| `--es-surface` | Primary surface: cards, panels, top bar |
+| `--es-surface-2` | Recessed surface: table headers, wells |
+| `--es-border` | Default hairline border |
+| `--es-border-strong` | Emphasis border / focus track |
+| `--es-text` | Primary text |
+| `--es-text-2` | Secondary text |
+| `--es-text-muted` | Muted text, captions, placeholders |
+| `--es-accent` | Brand accent fill |
+| `--es-accent-hover` | Accent fill on hover |
+| `--es-accent-active` | Accent fill when pressed |
+| `--es-accent-text` | Accent foreground on surfaces and accent tints |
+| `--es-on-accent` | Text / icon foreground on accent fills |
+| `--es-accent-soft`, `--es-accent-soft-2` | Accent tints: soft fills, active navigation |
+| `--es-focus` | Focus color used by the ring definition |
+| `--es-focus-ring` | Solid focus shadow painted on `:focus-visible` |
 
-**Semantic status colors for DOCUMENT states** — these are the lifecycle states from the canonical state machine (Draft → In Review → Approved → Effective → Under Revision → Superseded → Obsolete). Each state has a token used consistently in badges, timelines, and dashboards. **Color is never the only signal** (DP-7): each state also carries an icon and a text label.
+Teal is the [selected brand direction](superpowers/plans/2026-08-29-s-ui-signal-board.md#21-accent--reconciled-to-the-brand-mark).
+Fill, foreground, and focus have separate roles. [`index.css`](../apps/web/src/index.css) paints
+`--es-focus-ring` and restores a system-color outline in forced-colors mode, where shadows are
+suppressed. Focus must stay visible and non-obscured. Mantine components use the brand ramp and
+`autoContrast` mapping in [`mantine.ts`](../apps/web/src/theme/mantine.ts); a filled Mantine button
+is not evidence of direct consumption of `--es-accent`.
+
+**Semantic status colors for DOCUMENT states** — these are the lifecycle states from the canonical state machine (Draft → In Review → Approved → Effective → Under Revision → Superseded → Obsolete). The Document and Record tables below retain the target semantic vocabulary: their legacy token names and color examples are not additional declared current CSS properties. **Color is never the only signal** (DP-7): each state also carries an icon and a text label.
 
 | Document state | Token | Light hex | Icon | Meaning |
 |---|---|---|---|---|
@@ -167,15 +222,19 @@ Two complete themes (**light** and **dark**) generated from the same token names
 | **Disposed** | `--rec-disposed` | `#6B7280` muted | 🗑 strike | Disposed per policy (audited event) |
 | **Correction-of** | `--rec-correction` | `#2E6FAE` (blue) | ⤺ link | Supersedes a prior record via `correction_of` chain |
 
-**Feedback colors** (toasts, banners, validation): `--success #1F8A52`, `--warning #B26A00`, `--danger #C2334A`, `--info #2A6FDB`. RAG dashboard semantics map to success/warning/danger.
+**Feedback colors** (toasts, banners, validation): `--es-success`, `--es-warning`, `--es-danger`,
+and `--es-info`. Tinted feedback uses the matching `--es-success-soft` / `--es-success-text`,
+`--es-warning-soft` / `--es-warning-text`, `--es-danger-soft` / `--es-danger-text`, and
+`--es-info-soft` / `--es-info-text` pairs where appropriate. RAG dashboard semantics map to
+success/warning/danger.
 
 > **Why a separate Document-state family and Record-status family?** It is the visual encoding of the maintain/retain rule (DP-4). A user scanning the Library can tell, *with color removed* (icon + label + position), whether they are looking at a living document or frozen evidence — the core teaching goal of the domain model.
 
 ### 3.3 Spacing, layout grid & density
 
 - **Base unit:** 4 px. Spacing scale: `4, 8, 12, 16, 24, 32, 48, 64` (tokens `space-1`…`space-8`). Component padding and gaps draw only from this scale.
-- **Layout grid:** 12-column fluid grid, max content width **1440 px**, gutters `space-4` (16). Reading-centric pages cap prose at `--measure: 75ch`.
-- **Shell metrics:** top bar 56 px; left rail 264 px expanded / 64 px collapsed; detail drawer 420 px (resizable 360–640), full-width sheet on mobile.
+- **Layout grid target:** 12-column fluid grid, max content width **1440 px**, gutters `space-4` (16). Reading-centric pages cap prose at `--measure: 75ch`. The declared `--es-content-max` is not a universal page-scaffold contract.
+- **Implemented shell sizing:** [`AppShell.tsx`](../apps/web/src/app/shell/AppShell.tsx) reads `--es-topbar-h` for the header and `--es-sidebar-w` for the expanded navbar; both are rem dimensions. The detail drawer uses `DRAWER_DEFAULT`, `DRAWER_MIN`, and `DRAWER_MAX` from [`drawerWidth.ts`](../apps/web/src/app/shell/drawerWidth.ts). [`DetailDrawer.tsx`](../apps/web/src/app/shell/DetailDrawer.tsx) bounds resizing to the viewport and uses full width when the resize range cannot fit. It does not read the declared `--es-drawer-w`.
 - **Density modes:** tables support **Comfortable** (default, 48 px rows) and **Compact** (36 px rows) — a per-table, persisted user choice (see §4.2). Density never drops the 24×24 px minimum target size for interactive cells (WCAG 2.2 Target Size).
 
 ### 3.4 Elevation
@@ -254,7 +313,7 @@ For First-Run Setup, Ingestion Review, New Document, and CAPA creation.
 
 Two badge families (Document state, Record status) from §3.2, plus generic feedback chips.
 
-- Anatomy: icon + label, pill shape, `font-overline` text, status token background at low alpha with full-strength text/border for contrast.
+- Anatomy: icon + label, pill shape, typography through Mantine's Badge size API as passed by [`StatusBadge.tsx`](../apps/web/src/lib/StatusBadge.tsx) and the [theme mapping](../apps/web/src/theme/mantine.ts), status token background at low alpha with full-strength text/border for contrast.
 - The **Effective ★** badge is visually the strongest (filled, slight glow) because "which version governs?" is the single most important question in document control.
 - Badges are never icon-only in primary contexts (label always present for a11y); icon-only is allowed only in dense cells with an accessible name via `aria-label` + tooltip.
 
@@ -354,7 +413,7 @@ Filters:  [Kind: Document ✕] [Clause: 8.x ▾] [State ▾] [Process ▾] [Owne
 Active filter shelf:  ( State: Effective ✕ )  ( Process: Order Fulfilment ✕ )
 ────────────────────────────────────────────────────────────────────────────
 ☐  Identifier      Title                     State        Clause   Rev  Owner
-──────────────────────────────────────────────────────────────────────────── 
+────────────────────────────────────────────────────────────────────────────
 ☐  SOP-PUR-002     Purchasing Procedure      ★ Effective  8.4      D    Diego
 ☐  WI-PRD-014      Final Inspection WI       ◔ In Review  8.6      —    Priya
 ☐  SOP-PRD-007     Production Control SOP     ✎ Draft      8.5      —    Priya
@@ -574,12 +633,12 @@ Summary:  ● 168 auto-classified   ▲ 31 need review   ✕ 9 conflicts/dupes
 Group by: ( Suggested type ) ( Source folder ) ( Clause )   [ filter ▾ ]
 ────────────────────────────────────────────────────────────────────────────
 ☐  Source file                 → Suggested      Kind     Clause  Confidence
-──────────────────────────────────────────────────────────────────────────── 
+────────────────────────────────────────────────────────────────────────────
 ☐  /Procedures/Purchasing.docx  SOP-PUR-???      Document 8.4 ?    ●●●●○ 86%
 ☐  /Forms/Cal Log.xlsx          FRM-CAL-???      Document 7.1.5    ●●●●● 94%
 ☐  /Records/2025 audit.pdf      Audit record     Record   9.2      ●●●○○ 71%
 ☐  /old/SOP-PUR v2 FINAL.docx   ⚠ duplicate of   —        —        conflict
-                                  Purchasing.docx                          
+                                  Purchasing.docx
 ────────────────────────────────────────────────────────────────────────────
 Selected: Purchasing.docx → [ Type: Procedure ▾ ] [ Identifier: SOP-PUR-002 ]
           [ Clause map: 8.4 ✕  + ] [ Process: Purchasing ▾ ] [ Owner: Diego ▾ ]
@@ -625,6 +684,10 @@ Inherited from NFR §11; the design system bakes these in:
 ### 6.3 Responsive behavior
 
 Target: desktop-first (latest two Chrome/Edge/Firefox/Safari), **responsive down to tablet** (NFR §11); native mobile is a non-goal (N10) but the layout must not break on a tablet/phone.
+
+The table is the responsive target. The current
+[`AppShell`](../apps/web/src/app/shell/AppShell.tsx) uses Mantine's `md` breakpoint for a toggled
+off-canvas navbar; it does not implement the target icon-rail transitions below.
 
 | Breakpoint | Layout adaptation |
 |---|---|

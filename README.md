@@ -137,7 +137,8 @@ remain deliberate. The [GitHub setup runbook](docs/runbooks/github-repository-se
 the branch gates, update bot, security checks, and the archived GitLab project.
 
 Use [issues](https://github.com/CoJoA13/EasySynQ/issues) for sanitized bug reports and feature
-requests; the [project board](https://github.com/CoJoA13/EasySynQ/projects) tracks them. Issues
+requests; the [project board](https://github.com/CoJoA13/EasySynQ/projects) tracks them. The
+[Wiki](https://github.com/CoJoA13/EasySynQ/wiki) provides a navigation index into the reviewed docs. Issues
 titled `[RES-…]` mirror records in the [residual ledger](docs/open-residuals.md), which stays
 authoritative. For a suspected vulnerability, follow [SECURITY.md](SECURITY.md) and report
 privately. Do not include credentials or installation data.

@@ -1,6 +1,6 @@
 # EasySynQ Decisions Register
 
-This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R86) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector. R82 adopts PolyForm Shield for original project materials and permits paid consulting for customer-owned instances. R83 adds inactive isolated original version-page transport and a bounded DeleteMarker metadata compatibility extension; that R83 boundary left required-witness collection and recovery open.
+This document is the **single authoritative source of truth** for the EasySynQ self-hosted ISO 9001:2015 QMS specification. It records the locked foundational decisions, the locked stakeholder decisions, and the normative resolutions (R1–R87) to every finding raised in the gap audit (`17-gaps-and-open-questions.md`); R38 (slice S-rec-4) is the first post-v1 *additive* decision (additive catalog extensibility + SoD-6), R39 (slice family S-aud/S-capa) locks the Audits/Findings/CAPA model + workflow posture, R40 (slice family S-dcr) locks the Revision & change-depth (DCR) family model + the InApproval reject-loop target, and R41 (slice S-drift-3) adds the `drift.read` SYSTEM-domain permission key; R42 (slice S-ack-1) adds the `document.distribute` CONTENT-domain key, R43 locks the Acknowledgements-family model, R65 locks the temporary pre-production compatibility posture, R66 locks browser-first first-administrator provisioning inside setup, R67 locks the client address a request is attributed to, R68 locks American-US English as the house spelling standard for user-facing text, R69 locks the interface colour-scheme preference to the account with AUTO selectable and the rail-foot clock on organization time, R70 locks the six-digit US date reading and 24-hour time as the user-facing display standard, and R71 makes Ubuntu 26.04 the supported developer host and retires the Fedora developer path with its disposable Workstation acceptance proof, and R72 makes the web security-lock pins a review trigger rather than a freeze, accepting jsdom 30 with undici 8; R73 binds explicit external legacy audit verification to an owner-controlled public enrollment file; R74 limits each online migration lock wait to five seconds while preserving existing transaction boundaries; R75 requires explicit historical audit target selection and complete coverage from every enrolled witness. R76 freezes v2 checkpoint and planned-transition bytes without activating writers, lineage verification or key rotation. R77 adds a pure supplied-lineage evaluator with explicit external pins, separate key authentication/edge authority and no operational consumer activation. R78 validates externally pinned legacy bootstrap packages without claiming operational collection, database agreement or key activation. R79 adds exact raw retained-version transport with explicit request identity, bounded admitted bodies and owned cleanup. R80 adds an inactive isolated read with verified Linux worker limits, bounded framing and post-cleanup result admission; complete operational collection and global reconciliation remain prerequisites. R81 adds strict decoding of original supplied version-page bytes, preserving untrusted observations without activating a collector. R82 adopts PolyForm Shield for original project materials and permits paid consulting for customer-owned instances. R83 adds inactive isolated original version-page transport and a bounded DeleteMarker metadata compatibility extension; that R83 boundary left required-witness collection and recovery open.
 
 R84 adds inactive required-witness namespace traversal with a fresh bounded private spool and
 post-cleanup diagnostics. It authenticates no history and activates no operational consumer.
@@ -9,6 +9,8 @@ entire-path coverage at every required witness and compact output only after com
 R86 returns primary hosting to GitHub (`CoJoA13/EasySynQ`) behind a ruleset-required `gate`
 check with Dependabot updates, supersedes the 2026-09-08 no-GitHub instruction, and archives
 the GitLab project so dated evidence keeps resolving.
+R87 records the scoped owner-approved security dependency repairs for PRs #608, #610 and #611
+with dated evidence in slice history, superseding only the affected R72 selections.
 
 **Precedence:** Where this register conflicts with any text in sections `01`–`15`, **this register supersedes that text.** Section editors MUST back-propagate the changes listed under each resolution's *Back-propagation* note. The exact tokens, enum values, state names, and field names quoted here are **canonical and verbatim** — they must be reproduced character-for-character (case, snake_case, dot-namespacing, and all) wherever the underlying concept appears. Do not soften, rename, abbreviate, or omit any token.
 
@@ -120,7 +122,7 @@ Proceed with the **full reconcile-and-harden pass** — i.e., adopt R1–R37 bel
 
 ---
 
-## Part 3 — Resolutions R1–R86
+## Part 3 — Resolutions R1–R87
 
 Each resolution states the decision, the exact canonical tokens/enums/states/field-names verbatim, and a Back-propagation note listing the section files that change.
 
@@ -1963,7 +1965,8 @@ implementation prose.
    the safe direction for an append-only chain.
 5. **Credential-reset authority (extends R35 to a non-grant operation).** Resetting an existing
    identity's credential is an account-takeover capability, unlike creating a permission-less one.
-   A caller may reset another user's credential **only if the caller is system-tier — full stop**;
+   A caller may reset any existing user's credential, including their own,
+   **only if the caller is system-tier — full stop**;
    the target's own authority is never inspected. `user.create` alone is insufficient, because it is
    grantable independently through a per-user override. An earlier draft of this rule instead
    permitted the reset whenever the target held no *system-domain* permission — that form was
@@ -2064,7 +2067,8 @@ The owner selected one no-SMTP browser flow for every fresh installation.
    credential, bootstrap secret, claim marker, or Keycloak subject enters an audit payload.
 6. **Post-setup separation is unchanged.** `user.create` creates accounts, `user.update` edits them,
    `permission.grant` separately gates role assignment, and R64’s system-tier guard remains mandatory
-   for resetting another existing user’s credential. No new permission key is introduced.
+   for resetting every existing linked user’s credential, including the caller’s own. No new permission
+   key is introduced.
 7. **Install-path convergence.** New install paths create no fixed human Keycloak account and write no
    human password to a setup sheet. Internal Keycloak service credentials remain installation
    secrets. Existing `OPERATIONAL` and legitimately `IN_SETUP` installations do not re-enter
@@ -2330,9 +2334,11 @@ the timestamp behind it breaks silently under this change — no type error, no 
 register in the wrong order. Enumerating every `useOrgDate` consumer and proving none does that is a
 precondition of the convergence work, not a review comment on it.
 
-**Back-propagation:** `11-ui-ux-design-system.md` when its §3 rewrite lands (that document is
-separately known to be drifted — `RES-DOC11-TOKEN-DRIFT`), and every surface named by
-`RES-DATE-TIME-DISPLAY-CONVERGENCE`. `lib/time.ts` carries the rule at the source in both formatters.
+**Back-propagation:** [Doc 11 §3.1](11-ui-ux-design-system.md#31-typography) now records this display
+standard; its token reconciliation is recorded in
+[dated slice history](slice-history.md#doc-11-follows-implemented-design-tokens-2026-10-12-utc).
+Every surface named by `RES-DATE-TIME-DISPLAY-CONVERGENCE` still requires convergence.
+`lib/time.ts` carries the rule at the source in both formatters.
 
 Bumps the resolutions range **R1–R69 → R1–R70**.
 
@@ -2385,6 +2391,9 @@ Bumps the resolutions range **R1–R70 → R1–R71**.
 ---
 
 ### R72 — The web security-lock pins are a review trigger, not a freeze — 2026-09-03
+
+**Later selection update:** R87 supersedes the `brace-expansion` and `undici` selections for its
+scoped PR repairs; this decision's review, live-audit and no-downgrade rules remain binding.
 
 **Context.** `scripts/tests/test-web-security-lock.mjs` pins the exact resolved versions of four web
 dependencies — `brace-expansion`, `undici`, `nanoid` and the React Router pair — which the
@@ -3563,6 +3572,54 @@ templates, [current status](current-status.md) (CI topology), [open residuals](o
 [slice history](slice-history.md), and the contributor command and pattern files under `.claude/`.
 
 Bumps the resolutions range **R1–R85 → R1–R86**.
+
+---
+
+### R87 — Scoped security dependency repairs for Dependabot PRs #608, #610 and #611 — 2026-09-30
+
+**Owner approval and scope.** The owner explicitly approved repairing and pushing these three
+existing PRs, then approved the additional application lock updates and patches to npm's bundled
+dependencies after current CI exposed their security failures. This approval is limited to these
+PR repairs. That September 30 approval authorized no merge, deployment, unrelated pin change, or
+standing permission for future dependency updates. The Redocly PR's web and API security changes
+are part of this approved repair because its required full security job also tests those
+independently locked dependencies.
+On October 1 the owner separately authorized sequential squash merges of these PRs under the live
+main rules, and continued compatible security repairs for #610 and #611 after new scan findings.
+This follow-up does not authorize merging other dependency PRs or bypassing required checks.
+
+**Approved selections.** For these repairs, the web security guard selects exactly
+`brace-expansion` `1.1.21` and `5.0.12`, and application `undici` `8.10.2`, superseding R72's
+`brace-expansion` and `undici` selections. R72's review-trigger, live-audit and no-downgrade rules
+remain binding. The `nanoid` and React Router selections are unchanged. The API lock selects
+PyJWT `2.14.0` initially; the October 1 follow-up selects PyJWT `2.15.0` and urllib3 `2.8.0`
+within the existing compatible manifest ranges. The web image retains npm `11.19.1`
+and its existing startup command, replacing only npm's vendored `brace-expansion` with `5.0.12`
+and `undici` with `6.28.1`; their dependency requirements match the installed bundled copies.
+
+**Contract-toolchain selection.** The same required-gate repair selects compatible
+`brace-expansion` `2.1.7` in `packages/contracts/package-lock.json`, retaining every exact
+contract-tool version. No audit exception, major runtime migration, security-gate change,
+guard relaxation, or application startup change is approved here.
+
+**October 1 base-package repair.** Both application images explicitly upgrade their existing
+`libssl3t64` and `openssl-provider-legacy` packages; the API image also upgrades its existing
+`openssl` package. This retains the base distribution and startup/security contracts. The
+historical audit-history tests explicitly seed their fixed September 2026 partition after
+migration, independently of the shared fixture's moving current-month runway; timestamp
+assertions and production partition behavior remain unchanged.
+
+Dated verification results and immutable CI links are recorded in
+[the September 30 verification entry](slice-history.md#dependabot-repair-verification-2026-09-30)
+and [the October 1 follow-up](slice-history.md#dependabot-repair-follow-up-2026-10-01).
+
+**Back-propagation:** `apps/api/uv.lock`, `packages/contracts/package-lock.json`,
+`apps/web/package-lock.json`,
+`scripts/tests/test-web-security-lock.mjs`, both application Dockerfiles, and
+`apps/api/tests/integration/test_audit_history.py` carry these repairs.
+Every PR still requires a successful gate on its final head and resolved review conversations.
+
+Bumps the resolutions range **R1–R86 → R1–R87**.
 
 ---
 

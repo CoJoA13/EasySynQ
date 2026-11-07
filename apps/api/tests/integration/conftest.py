@@ -16,7 +16,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from httpx import ASGITransport, AsyncClient
 from jwt.algorithms import RSAAlgorithm
-from testcontainers.postgres import PostgresContainer
+from testcontainers.community.postgres import PostgresContainer
 
 ISSUER = "https://kc.test/realms/easysynq"
 AUDIENCE = "easysynq-api"
@@ -83,9 +83,9 @@ def _minio() -> Iterator[dict[str, str]]:
     """A MinIO container with the ``documents`` bucket created object-lock-enabled + a
     GOVERNANCE default retention (mirrors infra/compose/minio-init.sh), so every PUT auto-WORMs."""
     import boto3
-    from testcontainers.minio import MinioContainer
+    from testcontainers.community.minio import MinioContainer
 
-    container = MinioContainer("quay.io/minio/minio:RELEASE.2024-09-13T20-26-02Z")
+    container = MinioContainer("ghcr.io/cojoa13/easysynq/minio:RELEASE.2024-09-13T20-26-02Z")
     # Community MinIO's CORS control is global browser response access only. IAM/presigned request
     # authorization remains the access boundary, and the exact shipped image is exercised here.
     container.with_env("MINIO_API_CORS_ALLOW_ORIGIN", "http://test")
@@ -141,7 +141,7 @@ def _minio() -> Iterator[dict[str, str]]:
 
 @pytest.fixture(scope="session")
 def _redis() -> Iterator[str]:
-    from testcontainers.redis import RedisContainer
+    from testcontainers.community.redis import RedisContainer
 
     with RedisContainer() as rc:
         host = rc.get_container_host_ip()

@@ -189,6 +189,7 @@ class Code(StrEnum):
     invalid_transition = "invalid_transition"
     keycloak_email_exists = "keycloak_email_exists"
     keycloak_not_configured = "keycloak_not_configured"
+    keycloak_subject_missing = "keycloak_subject_missing"
     keycloak_unavailable = "keycloak_unavailable"
     keycloak_username_exists_unlinked = "keycloak_username_exists_unlinked"
     last_admin = "last_admin"
@@ -608,6 +609,22 @@ class EffectivePermissions(BaseModel):
         dict[str, Any], Field(description="The scope the permissions were resolved at.")
     ]
     permissions: list[EffectivePermissionEntry]
+
+
+class MyEffectivePermissions(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    scope: Annotated[
+        dict[str, Any], Field(description="The scope the permissions were resolved at.")
+    ]
+    permissions: list[EffectivePermissionEntry]
+    system_tier: Annotated[
+        bool,
+        Field(
+            description="Whether the caller satisfies the server's effective non-content-only permission.grant tier rule at SYSTEM scope, including scope, predicates and deny precedence. Evaluated independently of the scope requested for permission keys; user.create alone does not confer this tier."
+        ),
+    ]
 
 
 class TargetType(StrEnum):

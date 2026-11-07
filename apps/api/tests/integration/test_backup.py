@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import tempfile
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -26,7 +28,7 @@ from easysynq_api.db.models.audit_event import AuditEvent
 from easysynq_api.db.models.backup_policy import BackupPolicy
 from easysynq_api.db.session import get_sessionmaker
 from easysynq_api.services import backup as backup_service
-from easysynq_api.services.backup import archive, drill
+from easysynq_api.services.backup import archive, crypto, drill
 from easysynq_api.services.identity import provisioning as identity_provisioning
 from easysynq_api.tasks.app import app as celery_app
 
@@ -42,6 +44,54 @@ from .test_setup import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.mark.skipif(shutil.which("pg_dump") is None, reason="requires postgresql-client")
+@pytest.mark.parametrize("fail_after_restore", [False, True])
+async def test_drill_destination_contains_only_full_encrypted_archive(
+    app_under_test: object,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_after_restore: bool,
+) -> None:
+    """A real pg_dump round-trips the destination without exposing its plaintext there."""
+    del app_under_test
+    settings = get_settings()
+    destination = tmp_path / "destination"
+    packed_outside_destination = []
+    observed = []
+    real_pack = archive.pack_archive
+
+    def pack(*args: object, **kwargs: object) -> Path:
+        path = real_pack(*args, **kwargs)
+        packed_outside_destination.append(not path.is_relative_to(destination))
+        return path
+
+    def inspect_destination(_handle: drill.ScratchHandle) -> None:
+        files = list(destination.iterdir())
+        observed.extend(p.name for p in files)
+        encrypted = next(p for p in files if p.name.endswith(".tar.enc"))
+        assert archive.verify_archive(encrypted)
+        plain = crypto.decrypt_archive(
+            encrypted, tmp_path / "returned.tar", secret=settings.backup_encryption_key
+        )
+        dump = archive.unpack_dump(plain, tmp_path / "returned")
+        assert dump.read_bytes().startswith(b"PGDMP")
+        assert encrypted.stat().st_size > dump.stat().st_size
+        if fail_after_restore:
+            raise archive.BackupError("synthetic post-restore failure")
+
+    monkeypatch.setattr(archive, "pack_archive", pack)
+    result = drill.run_drill(
+        settings, destination=str(destination), after_restore=inspect_destination
+    )
+    assert result.result == ("FAIL" if fail_after_restore else "PASS"), result
+    if fail_after_restore:
+        assert result.reason == "synthetic post-restore failure"
+    assert packed_outside_destination == [True]
+    assert len(observed) == 2
+    assert all(name.endswith((".tar.enc", ".tar.enc.sha256")) for name in observed)
+    assert list(destination.iterdir()) == []
 
 
 @pytest.fixture

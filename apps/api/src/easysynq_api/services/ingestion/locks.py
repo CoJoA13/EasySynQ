@@ -7,7 +7,7 @@ concurrent
 constraint needed). Release is token-checked (CAS) so only the holder clears its own lock; the
 worker
 ``heartbeat``s per batch (a large tree can out-live any fixed TTL), and the stalled-scan reaper
-``force_release``s a lock whose worker died. Mirrors ``services/vault/locks.py`` (the check-out
+CAS-releases a lock whose worker died. Mirrors ``services/vault/locks.py`` (the check-out
 lock),
 keyed on the source-root hash instead of a document id."""
 
@@ -58,8 +58,7 @@ async def release(source_root_hash: str, token: str) -> bool:
 
 
 async def force_release(source_root_hash: str) -> None:
-    """Break the lock without the token — the stalled-run reaper recovering an abandoned source
-    root."""
+    """Break the lock without the token for explicit administration."""
     async with _redis() as client:
         await client.delete(_key(source_root_hash))
 
@@ -77,3 +76,9 @@ async def heartbeat(source_root_hash: str, token: str, *, ttl: int) -> bool:
     per-batch progress)."""
     async with _redis() as client:
         return bool(await client.eval(_HEARTBEAT_LUA, 1, _key(source_root_hash), token, str(ttl)))
+
+
+async def is_owned(source_root_hash: str, token: str) -> bool:
+    """Read this run's ownership without extending its lease."""
+    async with _redis() as client:
+        return bool(await client.get(_key(source_root_hash)) == token)

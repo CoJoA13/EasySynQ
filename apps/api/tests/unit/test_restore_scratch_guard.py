@@ -331,17 +331,13 @@ class _RunnerHarness:
             "run_triad",
             lambda _settings, _handle: drill.DrillResult("PASS", "restore verified"),
         )
-        self.monkeypatch.setattr(
-            drill,
-            "_capture_and_dump",
-            lambda _dsn, _path: (self.table_counts, self.blobs),
-        )
+
+        def capture(_dsn: str, path: Path) -> tuple[dict[str, int], list[archive.BlobRef]]:
+            path.write_bytes(b"synthetic database dump")
+            return self.table_counts, self.blobs
+
+        self.monkeypatch.setattr(drill, "_capture_and_dump", capture)
         self.monkeypatch.setattr(archive, "build_manifest", lambda *_args, **_kwargs: manifest)
-        self.monkeypatch.setattr(
-            archive,
-            "pack_archive",
-            lambda *_args, **_kwargs: self.tmp_path / "easysynq-backup-fresh.tar",
-        )
         retained = self.tmp_path / "easysynq-backup-20260908T010203Z-deadbeef.tar"
         retained.write_bytes(b"archive")
         self.monkeypatch.setattr(drill, "_newest_retained_archive", lambda _dest: retained)
@@ -721,13 +717,13 @@ def test_drill_runners_reject_every_static_worm_role_before_db_creation(
     monkeypatch.setattr(archive, "verify_archive", lambda _src: True)
 
     if runner == "fresh":
-        monkeypatch.setattr(drill, "_capture_and_dump", lambda _dsn, _path: ({}, []))
+
+        def capture(_dsn: str, path: Path) -> tuple[dict[str, int], list[archive.BlobRef]]:
+            path.write_bytes(b"synthetic database dump")
+            return {}, []
+
+        monkeypatch.setattr(drill, "_capture_and_dump", capture)
         monkeypatch.setattr(archive, "build_manifest", lambda *_args, **_kwargs: {})
-        monkeypatch.setattr(
-            archive,
-            "pack_archive",
-            lambda *_args, **_kwargs: tmp_path / "easysynq-backup-test.tar",
-        )
         result = drill.run_drill(settings, destination=str(tmp_path))
     else:
         retained = tmp_path / "easysynq-backup-20260908T010203Z-deadbeef.tar"

@@ -103,6 +103,7 @@ class _Server(http.server.ThreadingHTTPServer):
         self.sent = 0
         self.maximum_chunk = 0
         self.disconnected = False
+        self.expect_tls_rejection = False
 
     def handle_error(self, _request: object, _client_address: object) -> None:
         self.errors.append(type(sys.exception()).__name__)
@@ -113,6 +114,26 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, _format: str, *_args: Any) -> None:
         return
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        except BrokenPipeError:
+            # botocore validates the hostname AFTER completing the TLS handshake. In the
+            # negative TLS cases its expected close can race the server's first buffered read.
+            # Accept only that pre-HTTP close: ordinary fixtures, a received request line, and
+            # every other SSL/I/O exception must still fail the fixture's error assertion.
+            server = self.server
+            assert isinstance(server, _Server)
+            if (
+                not server.expect_tls_rejection
+                or getattr(self, "raw_requestline", b"")
+                or server.requests
+            ):
+                raise
+            self.close_connection = True
+            server.disconnected = True
+            server.finished.set()
 
     def do_GET(self) -> None:
         server = self.server
@@ -175,8 +196,12 @@ def _server(
     route: str = "body",
     tls: ssl.SSLContext | None = None,
     host: str = "127.0.0.1",
+    expect_tls_rejection: bool = False,
 ) -> Iterator[_Server]:
+    if expect_tls_rejection and tls is None:
+        raise ValueError("TLS rejection requires a TLS fixture")
     server = _Server(body, route, host)
+    server.expect_tls_rejection = expect_tls_rejection
     if tls is not None:
         server.socket = tls.wrap_socket(server.socket, server_side=True)
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
@@ -533,7 +558,12 @@ def _routing(config: dict[str, Any]) -> dict[str, Any]:
         ("untrusted-tls", "untrusted", "127.0.0.1", "TRANSPORT_FAILURE"),
         ("wrong-host-tls", "trusted", "127.0.0.2", "TRANSPORT_FAILURE"),
     ):
-        with _server(_page(), tls=_tls_context(config, certificate), host=host) as server:
+        with _server(
+            _page(),
+            tls=_tls_context(config, certificate),
+            host=host,
+            expect_tls_rejection=expected == "TRANSPORT_FAILURE",
+        ) as server:
             value, error, worker = _call(_reader(server, config, tls=True, host=host))
             if expected == "accepted":
                 assert error is None and value.body == _page()

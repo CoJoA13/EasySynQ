@@ -7,6 +7,10 @@
 infra/compose/.env
 **/secrets/
 
+# Operator-local installation artifacts (R61)
+/infra/compose/compose.site.yml
+/easysynq-root-ca.crt
+
 # --- generated code (regenerated from packages/contracts/openapi.yaml) ---
 packages/contracts/dist/
 apps/api/src/easysynq_api/_generated/

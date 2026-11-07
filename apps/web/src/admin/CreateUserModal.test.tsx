@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { apiGet } from "../lib/api";
 import type { AdminUser, ProvisionedUser, RoleSummary } from "../lib/types";
 import { server } from "../test/msw/server";
+import { flushTestQueryNotifications } from "../test/queryNotifications";
 import { renderWithProviders } from "../test/render";
 import { CreateUserModal } from "./CreateUserModal";
 
@@ -63,6 +64,14 @@ function grant(keys: string[]) {
 
 function renderModal(onClose: () => void = () => {}) {
   return renderWithProviders(<CreateUserModal opened onClose={onClose} token="test-token" />);
+}
+
+async function settlePermissions(queryClient: QueryClient) {
+  await waitFor(() => {
+    expect(queryClient.getQueryState(["me-permissions", "SYSTEM", null])?.status).toBe("success");
+    expect(queryClient.isFetching()).toBe(0);
+  });
+  await act(async () => flushTestQueryNotifications());
 }
 
 describe("CreateUserModal", () => {
@@ -346,6 +355,119 @@ describe("CreateUserModal", () => {
     expect(linkBody).toMatchObject({ keycloak_subject: COLLISION_SUBJECT });
   });
 
+  it.each([
+    { displayName: "Original Person", email: "original@example.com" },
+    { displayName: "", email: "" },
+  ])(
+    "links the submitted identity after pending edits: $displayName",
+    async ({ displayName, email }) => {
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let createBody: unknown;
+      let linkBody: unknown;
+      grant(["permission.grant", "role.read"]);
+      server.use(
+        http.get("/api/v1/roles", () => HttpResponse.json(ROLES)),
+        http.post("/api/v1/users/provision", async ({ request }) => {
+          createBody = await request.json();
+          await gate;
+          return HttpResponse.json(
+            {
+              code: "keycloak_username_exists_unlinked",
+              keycloak_subject: COLLISION_SUBJECT,
+            },
+            { status: 409 },
+          );
+        }),
+        http.post("/api/v1/users", async ({ request }) => {
+          linkBody = await request.json();
+          return HttpResponse.json(PROVISIONED_USER, { status: 201 });
+        }),
+      );
+      const onClose = vi.fn();
+      const user = userEvent.setup();
+      renderModal(onClose);
+      await user.type(screen.getByLabelText(/Username/), "original");
+      if (displayName) await user.type(screen.getByLabelText("Display name"), displayName);
+      if (email) await user.type(screen.getByLabelText("Email"), email);
+      await user.click(screen.getByRole("button", { name: "Create" }));
+      await waitFor(() =>
+        expect(createBody).toMatchObject({
+          username: "original",
+          display_name: displayName,
+          email,
+          role_ids: [],
+        }),
+      );
+
+      try {
+        for (const [label, value] of [
+          [/Username/, "edited"],
+          ["Display name", "Another Person"],
+          ["Email", "edited@example.com"],
+        ] as const) {
+          await user.clear(screen.getByLabelText(label));
+          await user.type(screen.getByLabelText(label), value);
+        }
+        await user.click(screen.getByPlaceholderText(/assign roles/i));
+        await user.click(await screen.findByText("Employee"));
+        expect(screen.getByLabelText("Display name")).toHaveValue("Another Person");
+      } finally {
+        act(() => release());
+      }
+      await screen.findByRole("button", { name: "Link the existing account" });
+      const warnedAboutRoles = screen.queryByText(/will not be assigned by linking/) !== null;
+      await user.click(screen.getByRole("button", { name: "Link the existing account" }));
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+      expect(linkBody).toEqual({
+        keycloak_subject: COLLISION_SUBJECT,
+        display_name: displayName || "original",
+        email: email || null,
+      });
+      expect(warnedAboutRoles).toBe(false);
+    },
+  );
+
+  it("binds a fresh collision to the new submission after choosing another username", async () => {
+    let linkBody: unknown;
+    server.use(
+      http.post("/api/v1/users/provision", async ({ request }) => {
+        const body = (await request.json()) as { username: string };
+        return HttpResponse.json(
+          {
+            code: "keycloak_username_exists_unlinked",
+            keycloak_subject: `subject-${body.username}`,
+          },
+          { status: 409 },
+        );
+      }),
+      http.post("/api/v1/users", async ({ request }) => {
+        linkBody = await request.json();
+        return HttpResponse.json(PROVISIONED_USER, { status: 201 });
+      }),
+    );
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    renderModal(onClose);
+    await user.type(screen.getByLabelText(/Username/), "first");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await user.click(await screen.findByRole("button", { name: "Choose a different username" }));
+    await user.clear(screen.getByLabelText(/Username/));
+    await user.type(screen.getByLabelText(/Username/), "second");
+    await user.type(screen.getByLabelText("Display name"), "Second Person");
+    await user.type(screen.getByLabelText("Email"), "second@example.com");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+    await user.click(await screen.findByRole("button", { name: "Link the existing account" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(linkBody).toEqual({
+      keycloak_subject: "subject-second",
+      display_name: "Second Person",
+      email: "second@example.com",
+    });
+  });
+
   it("Choose a different username returns to the editable form without closing the modal", async () => {
     server.use(
       http.post("/api/v1/users/provision", () =>
@@ -423,14 +545,117 @@ describe("CreateUserModal", () => {
     expect(screen.queryByText("Couldn't create user")).toBeNull();
   });
 
-  it("the role picker is absent without permission.grant", async () => {
-    renderModal();
+  it.each([
+    { name: "grant without read", keys: ["user.create", "permission.grant"], cached: false },
+    { name: "read without grant", keys: ["user.create", "role.read"], cached: false },
+    { name: "neither role permission", keys: ["user.create"], cached: false },
+    {
+      name: "grant without read and cached roles",
+      keys: ["user.create", "permission.grant"],
+      cached: true,
+    },
+  ])("hides the role picker and skips the catalog with $name", async ({ keys, cached }) => {
+    grant(keys);
+    let catalogRequests = 0;
+    server.use(
+      http.get("/api/v1/roles", () => {
+        catalogRequests += 1;
+        return HttpResponse.json(
+          { code: "permission_denied", title: "Forbidden" },
+          { status: 403 },
+        );
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    if (cached) queryClient.setQueryData(["roles"], ROLES);
+    renderWithProviders(<CreateUserModal opened onClose={() => {}} token="test-token" />, {
+      queryClient,
+    });
+
     await screen.findByLabelText(/Username/);
-    expect(screen.queryByText("Roles")).toBeNull();
+    await settlePermissions(queryClient);
+
+    expect(screen.queryByLabelText("Roles", { selector: "input" })).toBeNull();
+    expect(catalogRequests).toBe(0);
   });
 
-  it("the role picker is present with permission.grant and lists the seeded roles", async () => {
-    grant(["permission.grant"]);
+  it("creates an account without roles when grant is held without catalog read", async () => {
+    grant(["user.create", "permission.grant"]);
+    let body: unknown;
+    let catalogRequests = 0;
+    server.use(
+      http.get("/api/v1/roles", () => {
+        catalogRequests += 1;
+        return HttpResponse.json(
+          { code: "permission_denied", title: "Forbidden" },
+          { status: 403 },
+        );
+      }),
+      http.post("/api/v1/users/provision", async ({ request }) => {
+        body = await request.json();
+        return HttpResponse.json(PROVISION_RESPONSE, { status: 201 });
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const user = userEvent.setup();
+    renderWithProviders(<CreateUserModal opened onClose={() => {}} token="test-token" />, {
+      queryClient,
+    });
+    await settlePermissions(queryClient);
+
+    await user.type(screen.getByLabelText(/Username/), "newhire");
+    await user.click(screen.getByRole("button", { name: "Create" }));
+
+    expect(await screen.findByText(PROVISION_RESPONSE.temporary_password)).toBeInTheDocument();
+    expect(body).toMatchObject({ username: "newhire", role_ids: [] });
+    expect(catalogRequests).toBe(0);
+  });
+
+  it("keeps cached roles hidden until both permissions resolve", async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let permissionsRequested = false;
+    let catalogRequests = 0;
+    server.use(
+      http.get("/api/v1/me/permissions", async () => {
+        permissionsRequested = true;
+        await gate;
+        return HttpResponse.json({
+          scope: { level: "SYSTEM", selector: null },
+          permissions: ["permission.grant", "role.read"].map((key) => ({
+            key,
+            effect: "ALLOW",
+            source: null,
+          })),
+        });
+      }),
+      http.get("/api/v1/roles", () => {
+        catalogRequests += 1;
+        return HttpResponse.json(ROLES);
+      }),
+    );
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    queryClient.setQueryData(["roles"], ROLES);
+    renderWithProviders(<CreateUserModal opened onClose={() => {}} token="test-token" />, {
+      queryClient,
+    });
+
+    try {
+      await waitFor(() => expect(permissionsRequested).toBe(true));
+      await act(async () => flushTestQueryNotifications());
+      expect(screen.queryByLabelText("Roles", { selector: "input" })).toBeNull();
+      expect(catalogRequests).toBe(0);
+    } finally {
+      await act(async () => release?.());
+      await settlePermissions(queryClient);
+    }
+    expect(await screen.findByLabelText("Roles", { selector: "input" })).toBeInTheDocument();
+  });
+
+  it("the role picker lists seeded roles with grant and read permissions", async () => {
+    grant(["permission.grant", "role.read"]);
     server.use(http.get("/api/v1/roles", () => HttpResponse.json(ROLES)));
     const user = userEvent.setup();
     renderModal();
@@ -442,7 +667,7 @@ describe("CreateUserModal", () => {
   });
 
   it("selecting a role reaches role_ids in the POST body, alongside other optional fields", async () => {
-    grant(["permission.grant"]);
+    grant(["permission.grant", "role.read"]);
     server.use(http.get("/api/v1/roles", () => HttpResponse.json(ROLES)));
     let body: unknown;
     server.use(
@@ -470,7 +695,7 @@ describe("CreateUserModal", () => {
   });
 
   it("the collision Alert warns that a selected role will not be assigned by linking", async () => {
-    grant(["permission.grant"]);
+    grant(["permission.grant", "role.read"]);
     server.use(http.get("/api/v1/roles", () => HttpResponse.json(ROLES)));
     server.use(
       http.post("/api/v1/users/provision", () =>
@@ -500,7 +725,7 @@ describe("CreateUserModal", () => {
   });
 
   it("the collision Alert has no role-drop warning when no role was selected", async () => {
-    grant(["permission.grant"]);
+    grant(["permission.grant", "role.read"]);
     server.use(http.get("/api/v1/roles", () => HttpResponse.json(ROLES)));
     server.use(
       http.post("/api/v1/users/provision", () =>
@@ -517,7 +742,7 @@ describe("CreateUserModal", () => {
     const user = userEvent.setup();
     renderModal();
 
-    // The role picker is available (permission.grant is held, roles are loaded) but nothing is
+    // The role picker is available (grant and read are held, roles are loaded) but nothing is
     // picked — the warning must not appear just because the caller COULD select roles.
     await user.type(screen.getByLabelText(/Username/), "orphan");
     await screen.findByText("Roles");

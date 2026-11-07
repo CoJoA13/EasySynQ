@@ -1,6 +1,7 @@
 # Design — audit remediation execution order after PR #443
 
-> **Status:** proposed for owner review; documentation only
+> **Historical pre-merge status:** proposed for owner review; documentation only
+> **Ratification:** merged in [#444](https://github.com/CoJoA13/EasySynQ/pull/444); the dated coordination update below narrows only #420 sequencing.
 > **Date:** 2026-08-06 · **Baseline:** `main` at `1e35a21` (PR #443) · **Migration head:** `0085`
 > **Authority:** the finding ledger, slice contracts, and historical evidence remain in
 > [`2026-08-04-audit-remediation-v2.md`](../plans/2026-08-04-audit-remediation-v2.md).
@@ -9,6 +10,14 @@
 > Sections 4 and 4.2 supersede only v2 §4's Stage-2 integrity/recovery ordering and v2 §6 rule 1's
 > migration-reservation table; v2's later-stage ordering, hard dependencies, release gates, finding
 > ledger, and slice contracts remain authoritative.
+
+
+> **#420 coordination update (2026-10-01):** this design was ratified on merge in #444.
+> The later owner-authorized residual contract permits the bounded encrypted transient-drill
+> closure in #616 before the full `S-backup-legs` slice. See the
+> [dated scope reconciliation](../../slice-history.md#restore-drill-scope-reconciliation-2026-10-01)
+> for the pinned contract and owner evidence. This exception does not complete `M-01`/`S-backup-legs`,
+> waive D-B4, or alter the broader recovery requirements below.
 
 ---
 

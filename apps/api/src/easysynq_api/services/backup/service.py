@@ -12,28 +12,33 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import json
 import logging
 import os
 import posixpath
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from functools import partial
 from pathlib import PurePosixPath
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from ...config import get_settings
+from ...config import Settings, get_settings
 from ...db.models._audit_enums import ActorType, AuditObjectType, EventType
 from ...db.models.audit_event import AuditEvent
 from ...db.models.backup_policy import BackupPolicy
 from ...logging import request_id_var
+from ..common.org_clock import resolve_org_tz
 from ..common.pg_locks import LOCK_RESTORE_DRILL, LOCK_RESTORE_LIVE, pg_advisory_lock
 from ..notifications.constants import EVENT_BACKUP_FAILED
 from ..notifications.ops_channel import OperatorAlert, send_operator_alert
 from ..notifications.ops_events import emit_backup_failed
 from . import drill, restore
 from .drill import ScratchHandle
+from .schedule import resolve_schedule
+from .scheduled_archive import build_scheduled_backup
 
 logger = logging.getLogger("easysynq.backup")
 
@@ -164,20 +169,26 @@ async def _report_backup_failure(
     )
 
 
-async def run_scheduled_backups() -> dict[str, Any]:
+async def run_scheduled_backups(*, only_due: bool = False) -> dict[str, Any]:
     """Write a durable backup archive for every configured ``backup_policy`` (one per org;
     single-org in MVP, D1). The nightly Beat job + ``easysynq backup run`` target. Best-effort +
-    logged: one org's failure does not abort the others (the drill, not this, is the gating)."""
+    logged: one org's failure does not abort the others (the drill, not this, is the gating).
+    Beat opts into ``only_due``; explicit CLI/service calls remain immediate."""
     settings = get_settings()
     engine = create_async_engine(settings.database_url)
     sessionmaker: async_sessionmaker[AsyncSession] = async_sessionmaker(
         engine, expire_on_commit=False
     )
     results: list[dict[str, Any]] = []
+    policy_ids: Sequence[uuid.UUID] = ()
     try:
         try:
             async with sessionmaker() as session:
-                policies = (await session.scalars(select(BackupPolicy))).all()
+                if only_due:
+                    policy_ids = (await session.scalars(select(BackupPolicy.id))).all()
+                    policies = []
+                else:
+                    policies = list((await session.scalars(select(BackupPolicy))).all())
         except Exception as exc:
             # THE mode the in-DB path structurally cannot report (the finding's core point): with
             # PostgreSQL down there is no policy list, no admin to resolve, no notification to
@@ -196,6 +207,8 @@ async def run_scheduled_backups() -> dict[str, Any]:
                 ),
             )
             raise
+        if only_due:
+            return await _run_due_backups(settings, sessionmaker, policy_ids)
         for policy in policies:
             try:
                 out = await asyncio.to_thread(
@@ -234,6 +247,111 @@ async def run_scheduled_backups() -> dict[str, Any]:
         return {"backups": results}
     finally:
         await engine.dispose()
+
+
+async def _run_due_backups(
+    settings: Settings,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    policy_ids: Sequence[uuid.UUID],
+) -> dict[str, Any]:
+    results: list[dict[str, Any]] = []
+    for policy_id in policy_ids:
+        org_id: uuid.UUID | None = None
+        destination = ""
+        try:
+            async with sessionmaker() as session:
+                policy = await session.scalar(
+                    select(BackupPolicy)
+                    .where(BackupPolicy.id == policy_id)
+                    .with_for_update(skip_locked=True)
+                )
+                if policy is None:
+                    continue
+                org_id, destination = policy.org_id, policy.destination
+                previous = policy.last_scheduled_attempt_at or policy.created_at
+                claimed = _now()
+                tz = await resolve_org_tz(session, org_id)
+                schedule = resolve_schedule(policy.cron, now=claimed, tz=tz)
+                if not schedule.due(previous, claimed, tz):
+                    continue
+                family = uuid.uuid5(
+                    uuid.NAMESPACE_URL,
+                    json.dumps(
+                        [
+                            str(policy.id),
+                            previous.astimezone(datetime.UTC).isoformat(),
+                            schedule.expression,
+                            tz.key,
+                            destination,
+                        ]
+                    ),
+                )
+                # Capture immutable policy values inside this fresh, locked transaction. The
+                # filesystem lock also covers a continued thread after DB disconnect/cancellation.
+                is_due = partial(schedule.due, previous, tz=tz)
+                reusable = partial(schedule.reusable, previous, tz=tz)
+
+                attempt_time = claimed
+                try:
+                    result = await asyncio.to_thread(
+                        build_scheduled_backup,
+                        settings,
+                        destination=destination,
+                        policy_id=policy_id,
+                        family_id=family,
+                        clock=_now,
+                        is_due=is_due,
+                        reusable=reusable,
+                    )
+                    if result is None:
+                        continue
+                    attempt_time, out = result
+                    if not out.get("verified", False):
+                        out = {**out, "error": "scheduled archive failed checksum verification"}
+                except Exception as exc:
+                    logger.exception("scheduled backup capture failed for org %s", org_id)
+                    out = {"error": str(exc)[:200]}
+                policy.last_scheduled_attempt_at = attempt_time
+                await session.commit()
+            results.append({"org_id": str(org_id), **out})
+            if "error" in out:
+                await _report_backup_failure(
+                    sessionmaker,
+                    org_id=org_id,
+                    destination=destination,
+                    error=out["error"],
+                )
+            else:
+                logger.info("backup.run.done", extra={"extra_fields": out})
+        except Exception as exc:
+            # A failed commit retains the previous watermark; the next delivery verifies and
+            # reuses the completed artifact. Do not access expired ORM state after rollback.
+            logger.exception("scheduled backup failed for policy %s", policy_id)
+            if org_id is None:
+                # Listing IDs can succeed just before the DB fails. The claim cannot resolve an
+                # organization then, so preserve the DB-independent alarm and a visible failure.
+                results.append({"policy_id": str(policy_id), "error": str(exc)[:200]})
+                await send_operator_alert(
+                    settings,
+                    OperatorAlert(
+                        event=EVENT_BACKUP_FAILED,
+                        severity="critical",
+                        summary="scheduled backup could not claim its policy; no backup ran",
+                        detail={"policy_id": str(policy_id), "error": str(exc)[:200]},
+                    ),
+                )
+            else:
+                results.append({"org_id": str(org_id), "error": str(exc)[:200]})
+                try:
+                    await _report_backup_failure(
+                        sessionmaker,
+                        org_id=org_id,
+                        destination=destination,
+                        error=str(exc)[:200],
+                    )
+                except Exception:
+                    logger.exception("scheduled backup failure reporting failed")
+    return {"backups": results}
 
 
 async def run_restore_test(

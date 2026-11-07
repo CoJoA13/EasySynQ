@@ -82,6 +82,11 @@ class ImportRun(Base):
     scan_started_at: Mapped[datetime.datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Completed pipeline batches, including computation before atomic result replacement.
+    # NULL preserves legacy progress fallback until a worker finishes its first batch.
+    last_batch_progress_at: Mapped[datetime.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     # S-ing-5: the commit-stage progress anchor. Commit holds NO source-root lock (freed at
     # Proposed),
     # so the dedicated reap_stalled_commits uses progress-liveness: stall =

@@ -5,6 +5,1097 @@
 > See [`docs/current-status.md`](current-status.md) for the dated coordination snapshot and
 > [`docs/open-residuals.md`](open-residuals.md) for the current owner-visible residual ledger.
 
+
+## LSH candidate progress follow-up (2026-10-13 UTC)
+
+Review of [#645](https://github.com/CoJoA13/EasySynQ/pull/645) identified candidate construction
+as an uninstrumented phase of the in-process near-duplicate detector. The original completed-batch
+design explicitly excluded that synchronous phase. This bounded follow-up adds checkpoints for
+completed bucket placements and every pair insertion attempt, including repeated attempts across
+bands. The shared pure iterator preserves the synchronous candidate API, pair membership, signature
+math, exact-Jaccard threshold and deterministic cluster output. The detector awaits its existing
+callback after 256 completed operations and a nonempty remainder; callback failures propagate
+before further work or result replacement.
+
+Four focused unit regressions failed on the prior implementation for absent candidate callbacks
+or missing callback exceptions. A real-worker regression independently completed 192 placements,
+480 pair attempts and 15 exact verifications without a candidate checkpoint. This establishes the
+callback gap, not a measured 1,800-second lease breach. The repaired implementation passed
+**46 progress/detector/minhash unit tests** and **123 ingestion/review integration tests**, with
+no failures or skips. The real-worker case observes two independently committed candidate
+heartbeats, advancing timestamps and retained token ownership from separate sessions, reaper
+survival before any output replacement, and one deterministic near cluster with one Proposing
+transition/enqueue. Replay preserves that result. Generic and typed-stop callback exceptions
+are covered; cancellation propagation was reviewed statically without a new cancellation test.
+API Ruff lint/format and mypy across 486 source files passed on the same frozen runtime inputs.
+
+The migration, worker ownership/reaper logic, lock TTL and six-hour backstop are unchanged. The
+full API unit result in the earlier entry remains evidence for that earlier source; fresh PR CI
+is required for this follow-up. Cadence bounds completed work units, not elapsed time. Individual
+operations, singleton-bucket traversal, components, score scans, sorting and final SQL replacement
+retain their synchronous limits. The manual and module introductions now state these limits;
+there is no timer, fabricated progress or arbitrary-input liveness guarantee.
+
+
+## Completed-batch ingestion progress (2026-10-12 UTC)
+
+RES-INGEST-PROGRESS is CLOSED ([#571](https://github.com/CoJoA13/EasySynQ/issues/571),
+originating in [#367](https://github.com/CoJoA13/EasySynQ/pull/367)). Long dedup/proposal
+computation and replayed scanning now advance an internal batch timestamp before final stage
+results exist. Scanning, extraction and classification publish progress after each committed
+batch. Dedup/proposal computation records completed batches and nonempty tails, including
+skipped inputs, while keeping output replacement and stage transitions atomic.
+
+Migration `0095_ingest_batch_progress`, after `0094_backup_schedule_attempt`, adds nullable
+`import_run.last_batch_progress_at` without a default, backfill or index. A short independent
+session on the worker's engine admits the exact stage, source and token under the run-row lock,
+renews the owned Redis token and writes monotonic database statement time. Startup renewal
+alone does not advance progress. Review-time proposal rebuilds retain their caller transaction
+and write no pipeline heartbeat. Expected ownership/status loss rolls back pending outputs
+without advancing, failing or releasing a later stage's token.
+
+The pipeline reaper uses the newest batch stamp, five legacy stage-row maxima and scan start.
+It fails a run after lost token ownership or progress strictly older than the unchanged six-hour
+backstop; the source-lock TTL remains 1,800 seconds. A live lock alone does not defeat the
+backstop, correcting the earlier residual explanation. Failure cleanup uses the captured token
+so a replacement owner's lock survives. Commit recovery and its separate reaper are unchanged.
+
+Independent reviews accepted the plan, actual tests, classified baseline failures and both
+implementation scopes. On the unchanged implementation, **28 cadence/detector/minhash tests**,
+**5 populated/R74 migration tests** and **122 ingestion/review integration tests** passed with
+no skips. The populated migration proof covers upgrade/downgrade/re-upgrade, preserved business
+and audit data, application-role access and schema drift. Runtime regressions cover real long
+Deduping/Proposing and replayed Scanning, independent progress visibility, caller rollback,
+strict cutoffs, both row-lock orderings and replacement-token races.
+
+The full API unit selection passed **5,209 tests, with two existing opt-in skips**, in
+**1,050.25 seconds**. The skipped release digest-pin and built-image checks are not local
+acceptance evidence. An earlier ten-minute wrapper limit interrupted this same source without
+an assertion failure; the suspected audit case passed alone and within the complete unchanged
+selection after allowing a longer bounded run. API and migration Ruff lint/format, mypy across
+486 source files, sole executable Alembic head, authority and whitespace checks passed. The
+tracked implementation tree passed the site-data guard in **14.263 seconds**. The complete
+authority fixture suite then passed **96 checks**, including the closed-residual contract.
+A regression-test comment was renamed after closure; exact inverse-byte and AST comparisons
+preserve the successful Python evidence without repeating it.
+
+Deploy with **stop writers → migrate → start updated writers**. Old workers can use the new
+schema but do not produce batch progress; new workers require the column. Stop updated writers
+before downgrade; it drops only the operational stamp, and re-upgrade restores NULL with legacy
+fallback. Each heartbeat needs another pooled connection. PostgreSQL and Redis remain separate
+systems, and an uninterrupted operation remains subject to the existing lease; no stronger
+fencing or unbounded-duration guarantee is claimed. This internal change adds no API field.
+Live deployment, release-image proof and a full contributor-host setup are not established by
+these local checks. Final documentation guards, complete independent final review, normal hooks
+and PR CI remain separate publication/merge gates.
+
+
+## Supported local installation artifacts (2026-10-12 UTC)
+
+Closes `RES-SITE-ARTIFACT-GITIGNORE` ([#423](https://github.com/CoJoA13/EasySynQ/issues/423),
+original item 3). The installation guidance now names `infra/compose/compose.site.yml` as the
+optional operator-local Compose overlay and root-level `easysynq-root-ca.crt` as the CA export.
+Two exact root-anchored rules prevent routine staging. Required Compose files, offline flags,
+socket restrictions and installer behavior are preserved; manual overlay use remains explicit.
+The runbooks, installation/administrator manuals and existing syslog example share this path.
+
+The public Git proof used nonexistent paths and created no installation artifacts. Both paths
+were unignored before their rules were added. Individual and combined checks now return status 0
+and identify exactly the root `.gitignore` rules:
+
+```text
+.gitignore:11:/infra/compose/compose.site.yml	infra/compose/compose.site.yml
+.gitignore:12:/easysynq-root-ca.crt	easysynq-root-ca.crt
+```
+
+Seven neighboring filename/extension/suffix/root-anchoring controls return status 1 with no
+output. All **eight** base and `compose.*.yml` files remain tracked, with exact baseline/index
+manifest equality and no ignore-rule match under `--no-index`. Neither local artifact is tracked.
+This proof protects the two documented paths; it does not permit site data in other filenames.
+
+Four affected documentation-content tests, the contributor-hosting contract, authority and
+whitespace checks passed. The final path's full tracked-tree site-data scan passed in **14.914
+seconds**. The content/hosting checks ran before the filename correction; inverse-byte comparison
+proved its only product changes were twelve path substitutions, preserving their tested meanings.
+The scanner and its policy were unchanged. No deployment, certificate export or runtime behavior
+was exercised or changed by this documentation correction.
+
+
+## Doc 11 follows implemented design tokens (2026-10-12 UTC)
+
+Closes `RES-DOC11-TOKEN-DRIFT` ([#562](https://github.com/CoJoA13/EasySynQ/issues/562)).
+[Doc 11](11-ui-ux-design-system.md) now cites the shipped typography, accent, focus and shell
+sources. It describes Archivo and system monospace, all seven type roles, the separate accent
+fill/text/focus roles, the solid focus shadow and forced-colors outline, and the actual shell and
+drawer consumers. Token names replace the stale copied values. Product decisions remain binding;
+`tokens.css` supplies implemented token values, and consumers establish actual use.
+
+The same documentation rewrite carries R69 account/scheme semantics and R70's organization-zone,
+US-date and 24-hour display standard. Existing date/time convergence remains open, as do #563 font
+glyph acceptance and #561 page structure. Responsive icon-rail behavior remains a target.
+No runtime code, token values, fonts, contrast settings or layout behavior changed.
+
+Independent plan and implementation reviews approved the correction and its bounded closure
+pointers. The source-based content proof checked **61 declared token references** and **seven
+exact typography rows**, with stale font/accent/shell claims absent. Repository-authority and
+whitespace checks passed; the implementation tree's site-data scan passed in **14.667 seconds**.
+These are documentation checks; no new browser or contrast-suite result is claimed. The August
+implementation history is preserved, with its former open pointer linked to this dated correction.
+
+
+## First-administrator recovery retains provider validation semantics (2026-10-12 UTC)
+
+Follow-up candidate for [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642).
+Provider user creation now classifies HTTP 400 and 422 as definitive profile-input rejection.
+First-administrator setup receives its existing rejection signal, rechecks the exact username
+and releases only the same still-unowned claim after confirmed absence. A found identity or
+failed reread retains the claim. Administrative 401/403 failures keep availability semantics;
+conflict handling, password-reset recovery and other provider operations retain their behavior.
+The historical issue plan is preserved with a dated amendment to its earlier 400-only rule.
+
+The tests exercise the actual provider client through HTTP mocks, ordinary provisioning and
+the real setup API with disposable PostgreSQL. The unchanged-code baseline produced exactly
+**5 intended failures and 24 passing controls**. One failure proved that the old classifier
+skipped the required lookup after POST even though its 502 status matched the outage expectation.
+Independent reviews accepted the plan, actual tests, classified regression and narrow
+implementation: one executable predicate plus explanatory comments and a docstring.
+
+Fresh affected verification passed **131 provider/identity unit cases** and **42 selected
+provisioning/setup integration cases**, with no skips or failures. The integration cohort covers
+400/422 release and corrected-username retry, found/outage retention, 401/403 claim and lock
+handling, redaction, audits, conflict recovery, serialization and post-commit controls.
+Affected Ruff lint/format, mypy across 485 source files, authority and both whitespace guards
+passed. The complete tracked tree scanned clean in **13.622 seconds**, below the unchanged
+30-second limit. Source identities stayed identical before and after all nine checks.
+
+Prior contract generation, browser build and **95 Chromium/19 legibility** results from the
+preceding integration remain evidence for unchanged inputs. The accepted scanner and harness
+also remain unchanged; their behavioral and progress proofs were not repeated. This follow-up
+does not establish live-provider, replacement sign-in or built-image acceptance. Final
+documentation guards, complete independent final review, normal hooks and fresh current-head
+CI remain required before publication or merge as applicable.
+
+## Identity recovery contracts verified with the accepted parallel changes (2026-10-12 UTC)
+
+Integration candidate for [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642), following
+merged #640 and #641. The resolved canonical contract retains the self-permissions system-tier
+field, separate administrator permissions response, missing-subject problem code and explicit
+identity-recovery responses. Canonical generation reproduced all five source/generated files
+from the independently reviewed combined candidate. The original provider implementation,
+regression tests, recovery manual and issue plan remain byte-identical to their reviewed branch.
+
+The history merge preserves every accepted main entry and the exact original #431 entry once.
+The residual ledger combines only the three approved closures and preserves unrelated records.
+Independent reviews approved the actual contract, content and generated-artifact integration.
+The accepted browser readiness correction and scanner/harness are inherited unchanged; their
+controlled regression, mutation and progress proofs remain historical evidence for identical
+inputs, rather than new measurements from this integration.
+
+Fresh final-source verification passed the contract check, **5 focused contract tests**, web lint,
+and a browser build followed by **95 Chromium cases**, including **19 legibility cases**.
+Every browser case had one passing result, zero retries, and no skipped, unexpected or flaky
+outcomes; the report contained no top-level errors. At a 1280px viewport and 20px root font,
+all twelve filtering/sorting snapshots retained the same five column boundaries, table origin
+and width; the complete label-inventory case also passed. The browser command completed in
+179.202 seconds. The post-build manifest records 160 files against the unchanged tested source.
+
+The integrated tracked-tree site-data scan passed in **13.386 seconds**; authority and both
+working/index whitespace guards passed. Before/after source identities were identical. The four
+existing OpenAPI composition warnings, generator FutureWarning and browser-runner localStorage
+ExperimentalWarning remain recorded. Browser evidence uses Chromium and synthetic fixtures;
+live-provider recovery, replacement sign-in and built-image acceptance are not claimed. Final
+documentation guards, independent complete final review, normal commit hooks and current-head
+CI remain required before publication or merge as applicable.
+
+## Scanner decisions and source lines are independent of filenames (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+Tracked filenames and grep locations now travel through NUL-delimited records. Colons, quotes,
+backslashes and embedded newlines cannot become source text or nonexistent display-name operands.
+The exact dash filename is passed as an equivalent file operand. Default scanner exclusion and
+explicit selection retain their existing behavior; raw paths remain package-cache keys.
+
+Existing allowance expressions now inspect matched source content before the diagnostic path is
+attached. A filename cannot grant an allowance or create a repository-owner identity hit. Owner
+metadata checks preserve their original expressions and emit only a physical location with the
+existing redacted marker. Newline-bearing paths are escaped into one diagnostic line. The existing
+reporter still splits whitespace in displayed filenames; this change does not promise exact public
+rendering of those path bytes. Address grammar, candidate advancement, slice masking, package
+qualification and binary behavior are preserved. No runtime executable or file exemption is added.
+
+The independently reviewed test-only regression recorded **153 passes and 262 intended failures**
+in 8.937 seconds against the unchanged scanner. The 47 fixture repositories make 94 gate calls
+and add 415 assertions, covering default and explicit selection, physical EOF and source lines,
+multiple records, every direct matcher, qualified locks, content-only allowances, redaction,
+constrained PATH, exact scanner selection and benign controls. Removing the new block restores
+all prior harness bytes and outcomes.
+
+The expanded harness passed **2159 assertions in 66.241 seconds**, including all 1744 earlier
+assertions and all 415 new assertions. All eight explicit locks passed. The complete tracked tree
+scanned clean in **14.407 seconds**, below the unchanged 30-second limit, including the deliberate
+per-record owner normalization cost. Separate scanner/harness syntax, authority and working/index
+whitespace checks passed with identical before/after source identities. Independent plan, test,
+classified regression and implementation reviews approved the change. Final documentation guards
+and complete final review remain required before publication, followed by current-head CI.
+
+Independent exact comparisons support reuse of the ten prior progress results, raw UTF-8 helper
+output and archived long-root proof for unchanged code paths and workloads. Those are historical
+measurements and do not establish the new owner cost; the full-tree duration above is fresh.
+Native Git Bash and ShellCheck remain unverified. The existing physical-line and bounded-source
+limitations still apply, and R61 continues to require human review.
+
+## Leading mixed addresses retain their complete IPv6 diagnostic (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The leading-address consumer now recognizes a complete mixed spelling with zero through five
+explicit hex groups and a four-octet decimal tail. New decimal octets use canonical values from
+zero through 255 without multidigit leading zeros. The complete IPv6 token is reported even when
+its IPv4 suffix is independently sanctioned or rejected. The exact mapped rule still delegates
+to IPv4 first, including its historical invalid-octet fixture; successful pure-hex handling precedes
+the generic fallback. Semantic aliases receive no new exemption. A dated original-plan amendment
+records the grammar and sources while preserving all previous plan bytes.
+
+Only adjacent consumer declarations and classification predicates changed. Candidate boundaries,
+original-length cursor advancement and complete-core terminal-period normalization are preserved.
+Malformed cores cannot become shortened leading matches. The separate legacy matcher retains its
+existing interior diagnostics for some malformed multiple-compression text. Slice masking,
+package qualification and every other scanner rule are unchanged.
+
+The reviewed test-only regression recorded **103 passes and 101 intended failures** in 6.723 seconds
+against the unchanged scanner. All preservation controls passed. The new 57-fixture cohort adds
+204 assertions with complete line-ending-bounded diagnostics, canonical octet edges, aliases,
+malformed forms, mapped ownership, genuine slices and independent neighboring addresses. Removing
+only that cohort restores every prior harness byte; no existing expectation changed.
+
+The final expanded harness passed **1744 assertions in 43.230 seconds**. All eight explicit locks
+passed, and the complete tracked tree scanned clean in **11.447 seconds**, below the unchanged
+30-second limit. Separate scanner/harness syntax, authority and working/index whitespace checks
+passed with identical before/after source identities. Independent plan, test and implementation
+reviews approved the correction. Final documentation guards and complete final review remain
+required before publication, followed by current-head CI.
+
+Independent byte comparison supports reuse of the ten prior five-second progress results, exact
+raw UTF-8 helper output and archived long-root proof for the unchanged helper and existing paths.
+Those are prior measurements, not new timings of this scanner; the expanded harness and full-tree
+duration above are fresh. Native Git Bash and ShellCheck remain unverified. The existing physical-
+line and bounded-source limitations still apply, and R61 continues to require human review.
+
+## Leading addresses retain detection before prose punctuation (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The leading-address consumer removes a complete terminal run of sentence periods after its
+existing lexical boundary checks, including before quotes and closing delimiters. Only a whole
+core matching the existing hex or mapped grammar is normalized. Internal dots, extra mapped
+components, overlong groups and identifier continuations cannot become shortened matches.
+Mapped endpoints retain IPv4 ownership, exact loopback remains excluded, and the cursor advances
+by the original candidate length. Slice masking and all other scanner rules are unchanged.
+
+The original two-period fixture retains its payload and explicitly changes to exact-address
+rejection. A dated amendment in the original plan supersedes the earlier single-period contract;
+all historical text and other prior outcomes remain preserved. Focused regression evidence on
+the unchanged scanner recorded **46 passes and 61 intended failures** in 2.893 seconds. Controls
+for malformed tokens, mapped addresses, lexical continuations and exact loopback passed.
+
+The final expanded harness passed **1540 assertions** in **37.016 seconds**. The new public
+progress probe passed all **11 assertions in 2.635 seconds**, within its unchanged five-second
+limit. Its exact 65,580-byte payload includes 65,536 periods, one genuine numeric slice and two
+independently checked complete endpoint diagnostics. A reviewed builtin character check replaced
+a costly test-only string copy without changing that payload, assertion count or deadline.
+All eight explicit locks passed. The complete tracked tree scanned clean in **12.171 seconds**,
+below the fixed 30-second limit. Syntax, authority and working/index whitespace checks passed;
+before/after source identities matched.
+
+Independent reviews confirmed the helper and all previous progress workloads unchanged. Their
+nine prior progress results, exact raw UTF-8 helper output and archived long-root proof are reused
+for those identical paths; they were not newly timed on this punctuation scanner. The new probe
+and full-tree duration above are fresh measurements. Earlier comparison timings remain historical.
+Independent plan, test and implementation reviews approved this correction. Final documentation
+guards and complete final review remain required before publication, followed by current-head CI.
+Native Git Bash and ShellCheck remain unverified. The physical-line and bounded-source limitations
+recorded below still apply, and R61 continues to require human review.
+
+## Slice masking preserves literal address text (2026-10-12 UTC)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The helper recognizes bounded source expressions from the original selected physical-line start.
+Quoted literals, backticks, comments and Markdown bullets retain their address text. A new frame
+after a semicolon requires a completed supported statement, and chained indexes require a
+recognized body. Quoted index keys retain literal brackets while permitting genuine later slices.
+Separated numeric atoms preserve token boundaries without inventing callable receivers.
+
+The helper reads fixed 4096-byte windows with absolute byte cursors. Source prefixes and slice
+bodies spanning windows are joined once; quotes stream with explicit escape carry. Lookahead
+keeps ordinary-index input intact unless a complete step qualifies for the existing mask.
+The expression predicates, step grammar and all scanner bytes outside this helper remain
+unchanged by the transport correction. No production dependency or file exemption was added.
+
+The initial literal-context regression recorded **1112 passing assertions and 207 intended
+failures** against the unchanged published guard. Independent fixture review confirmed all 118
+existing runtime inputs unchanged, including the original 17 slice controls and their neighbors.
+The later backtick control intentionally changes to rejection. Three reviewed progress framing
+amendments retain the original workload sizes and deadlines. Additional focused regressions
+cover normalized atom boundaries; nine byte-coordinate cases cover window boundaries, UTF-8,
+escapes, quoted keys, source transitions, unsupported triples and EOF.
+
+The final scanner passed **1437 assertions** in **39.451 seconds**. All nine progress workloads
+passed within unchanged five-second limits (0.150–3.754 seconds). This includes 2048 escaped
+literal/slice groups in 3.754 seconds and the complete two-pass all-slices case in 2.604 seconds.
+The quoted-key helper output matched all **8230 expected bytes**, preserving UTF-8 and exactly
+one final newline. The exact archived 65,562-byte call-root probe retained its endpoint and masked
+its genuine slice in **0.310 seconds**. All eight selected locks passed; the complete tracked tree
+scanned clean in **11.910 seconds**, below the fixed 30-second bound. Source identities remained
+unchanged. A final whitespace check identified one extra newline in the new plan amendment;
+removing it changes no historical text or scanner/test bytes.
+
+Independent plan, test and implementation reviews approved the correction. Final documentation
+guards and complete evidence review remain required before publication, followed by fresh
+current-head CI. The original controlled 4.45-fold comparison remains historical for its recorded
+source pair. The helper receives selected physical lines independently: it cannot infer strings
+or fences opened on earlier lines, and prose spelling a supported source expression is ambiguous.
+Native Git Bash and ShellCheck remain unverified. R61 continues to require human review.
+
+## Slice masking requires a framed source receiver (2026-10-11)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+Leading-compression addresses in prose brackets remain visible even when the preceding word
+resembles a call or an indexed receiver. Every accepted receiver now needs the original line
+start or an explicit source expression delimiter. Chained slices and ordinary indexes preserve
+that receiver's qualification; emitting a new chunk does not create a new line-start cue.
+Optional spaces/tabs, bounded calls and the existing step syntax remain supported.
+
+This remains a bounded lexical recognizer. Prose that deliberately spells an accepted source
+expression is ambiguous, and unsupported receiver spellings may require review. The package
+qualifier, IPv4 rules and all scanner code outside the slice helper are unchanged.
+
+The test-only regression run recorded **982 passing assertions and 72 intended failures**
+against the unchanged published guard. After repair, all **1054 assertions passed** in 29.870
+seconds, including all 952 earlier assertions and the original 17 slice positives. All eight
+progress probes returned the expected decisions within their fixed five-second deadlines
+(range 0.115–2.813 seconds). Two sparse fixtures gained explicit expression framing while
+preserving padding, Unicode content, token checks and deadlines; the small control's runtime
+payload is byte-identical. An additional public-gate probe with a 65,536-character ASCII call
+argument correctly masked its numeric slice and reported its neighboring address in 0.379 seconds.
+
+All eight explicit locks passed. The full tracked tree scanned clean in **6.597 seconds**, below
+the fixed 30-second bound. Syntax, authority and whitespace checks passed, with source identity
+unchanged. Independent plan, implementation and final evidence reviews are required before
+publication. The earlier 4.45-fold comparison is historical for its recorded source pair and is
+not a measurement of this follow-up. Native Git Bash and ShellCheck remain unverified; R61
+continues to require human review.
+
+## Public package version allowance checks lock context (2026-10-11)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The public click-plugins version assignment is now allowed only in an exact `uv.lock` basename
+with the ordered package header, exact package name, exact public version and public PyPI source.
+Qualification waits until the package closes. Duplicate ownership fields, incomplete declarations,
+multiline examples and unsupported array contexts deny the allowance. Supported dependency and
+wheel arrays remain accepted. This is a bounded recognizer for observed lock formatting, not a
+complete TOML parser; an unobserved spelling can require review rather than silently widening the
+allowance.
+
+Only the qualified assignment occurrence is masked. Other version-shaped endpoints, same-line
+neighbors and the rest of every selected lock remain scanned. The independent exact public
+artifact-URL rule and the indexed-slice helper remain unchanged, with no new runtime dependency.
+
+The unchanged published scanner reproduced false clean results for a standalone assignment in
+another file and an unrelated package in a lockfile. The first context regression run recorded
+640 passing assertions and 231 intended failures. Independent review then identified premature
+qualification at array rows; focused red evidence covered nested boolean/numeric arrays, partial
+openers, apparent comment closers and unclosed arrays before the final correction.
+
+The final expanded harness passed all **952 assertions** in 28.403 seconds, including genuine
+root/nested metadata, constrained-PATH, inline/multiline artifact and neighboring-token controls.
+All eight explicitly selected locks passed. The complete tracked-tree scan passed in **7.522
+seconds**, within the fixed 30-second bound. Syntax, repository-authority and whitespace checks
+passed; source identity was unchanged throughout verification.
+
+Independent plan, implementation and final evidence reviews are required before publication.
+The earlier 4.45-fold helper comparison below remains historical evidence for its recorded scanner
+hash. That helper and its progress probes are byte-identical in this follow-up; the new full-tree
+duration above measures the amended scanner. Native Git Bash and ShellCheck remain unverified.
+R61 still requires human review beyond these mechanical checks.
+
+## Site-data slice masking avoids per-character scans (2026-10-11)
+
+Follow-up candidate for [PR #641](https://github.com/CoJoA13/EasySynQ/pull/641).
+The indexed-slice helper now scans bracket events and emits unchanged chunks, using byte offsets
+inside the helper. A bounded expression check replaces the character-by-character step loop.
+Receiver rules, mask boundaries, diagnostics, lock coverage and all other matchers remain unchanged.
+This removes the measured long-prefix and long-step stalls without adding a production dependency.
+
+Before the repair, the small control passed in 0.166 seconds while both the 64 KiB no-bracket and
+long-step cases exceeded the fixed five-second deadline. After repair, all eight progress workloads
+passed their expected decisions within that deadline; the slowest recorded case took 3.022 seconds.
+The unchanged default harness passed all 591 assertions, and all eight explicitly selected locks
+passed. The full tracked-tree scan passed in 6.197 seconds after two fixture-source literals were
+assembled from the existing numeric variable; their generated test payloads remained unchanged.
+
+After #640 merged with required CI passing, the integrated-tree comparison changed only this helper
+between two isolated snapshots with identical tracked inputs, tools and locale. One warmup per
+variant and three alternating pairs all returned complete clean verdicts within the fixed
+30-second deadline. The median fell from 28.003 to 6.289 seconds, a 4.45-fold speedup. Both fixture
+manifests and the original source/index remained unchanged. Fresh integrated checks passed all
+eight locks, the full tracked tree, repository authority and staged/unstaged whitespace checks.
+
+Independent plan and implementation reviews approved the helper and fixtures. Independent actual
+integration review verified every inherited main history section, the original #421 entry and all
+unrelated residual records were preserved. All inherited application/contracts/browser sources
+match accepted main. Final evidence review and current-head CI remain acceptance gates. Earlier
+test evidence is reused only where source is unchanged. Native Git Bash and ShellCheck remain
+unverified; slice recognition remains lexical and bounded, and the scanner remains a backstop to
+R61 human review.
+
+## Table baseline waits for root-font shell padding (2026-10-11)
+
+Follow-up candidate for [PR #640](https://github.com/CoJoA13/EasySynQ/pull/640), also addressing
+the same browser failure on [PR #642](https://github.com/CoJoA13/EasySynQ/pull/642). The enlarged-text
+table test could record its baseline while the shell's 200ms padding transition was still running.
+Hosted failures measured table-left differences of 4.875px and 1.078125px with stable internal
+columns. The setup helper now flushes layout and waits, with a five-second bound, until the main
+element has no unfinished padding transitions. Existing physical assertions and their 1px limits
+remain unchanged.
+
+A controlled two-second transition reproduced a 52.953125px baseline error. The exact baseline
+contained four running padding transitions; the table then settled before any filter changed.
+With the helper repair, the same controlled setup passed with no unfinished transition at baseline.
+Removing fixed layout and compact column allocations still failed the original Last reviewed
+boundary assertion by 6.0625px. Restoring the production page and rebuilding passed **95/95 Chromium
+cases**, including all **19 legibility cases**, with zero skips, retries or flaky results
+(191.629 seconds wall time). Source and build identities were recorded for each state.
+
+Browser TypeScript/build and web lint passed. The first lint invocation included temporary report
+assets; removing those already archived coordinator files produced a pass on unchanged source.
+Independent plan, placement and implementation reviews approved the bounded setup correction.
+Final review and current-head GitHub CI remain merge gates. This evidence covers Chromium with
+synthetic fixtures; production layout, theme and dependencies were unchanged.
+
+## Credential-reset authority cross-reference aligned (2026-10-11)
+
+Follow-up candidate for [PR #640](https://github.com/CoJoA13/EasySynQ/pull/640).
+R66 rule 6 now explicitly retains the mandatory system-tier guard for every existing linked
+user's credential, including the caller's own. Review found that this cross-reference still said
+"another existing user" after R64 and doc 07 were aligned. No runtime or permission policy changes.
+
+The existing identity-onboarding authority test now checks R66 rule 6 separately from R64 and
+stops before rule 7. Against the unchanged sentence it failed at the new assertion; after the
+correction all four identity-onboarding contract tests passed. Independent review and current-head
+GitHub CI remain part of the merge handoff.
+
+## Provider failures name the supported identity recovery (2026-10-10)
+
+Closure candidate for [#431](https://github.com/CoJoA13/EasySynQ/issues/431),
+`RES-KEYCLOAK-ERROR-CLASSIFICATION`. Provider create400 remains invalid input and create409 remains
+a username or email conflict; other failures, including admin401/403, use availability/configuration
+guidance. Password-reset404 has a distinct missing-subject exception and public409
+`keycloak_subject_missing` problem naming administrator manual §5.3.1. Post-commit failures preserve
+the created application user, role assignments and audit, omit credentials, and explicitly require
+reload rather than retrying creation.
+
+The manual first requires realm/identity verification. Recovery uses a separate replacement
+principal through existing authorized create or adoption operations; adoption itself grants no
+roles and issues no credential. Operators explicitly review/grant access, issue a password when
+needed, verify sign-in and disable the old principal through its audited status operation. Old
+attribution remains intact. There is no direct database relink or generic ownership/work migration.
+Live sign-in remains an operator step, not an automated-test claim.
+
+The unchanged provider failed nine new classification assertions with 22 controls passing; real
+PostgreSQL/API tests produced 16 intended failures before route changes. Focused green passed 31
+provider and 16 recovery cases. Broader verification passed 5,180 API units, 285 response contracts,
+149 affected provisioning/admin/authz/setup integrations and 42 existing admin web cases. Two API
+skips are explicitly release-image and opt-in built-image proofs. Ruff, format, mypy, web lint/build,
+canonical contract check, authority and site-data guards passed.
+
+Commands include `uv run pytest tests/unit -m unit -q`, the contract-marked
+`tests/integration/test_contract_response_schemas.py`, and the integration-marked users provisioning,
+users admin, authz and setup suites in `apps/api`; `npm test -- src/admin/CreateUserModal.test.tsx
+src/admin/UsersAdmin.test.tsx`, `npm run lint` and `npm run build` in `apps/web`; and
+`bash scripts/gen-contracts.sh --check`, `bash scripts/check-repo-authority.sh` and
+`bash scripts/check-no-site-data.sh` from the repository.
+
+The isolated combination with #430 and #421 passed 147 focused API units, 285 response contracts,
+157 affected integrations, 77 web cases, 591 scanner assertions and the full-tree scan after canonical
+contract regeneration. Independent plan and implementation reviews approved both axes. A stale
+provision docstring was corrected and independently re-reviewed; comparison proved its executable
+AST and every other file unchanged, and fresh lint/format checks passed.
+This dated entry records the tested closure candidate; final independent review and PR CI belong
+to its handoff. The residual is removed on this branch and closes through the reviewed PR merge.
+Four existing OpenAPI date/date-time warnings and a generator FutureWarning remain recorded.
+Live provider, sign-in and built-image acceptance are not claimed.
+
+## Credential reset affordance follows server system tier (2026-10-10)
+
+Closure candidate for [#430](https://github.com/CoJoA13/EasySynQ/issues/430),
+`RES-CREDENTIAL-RESET-R64-ALIGNMENT`. The roster now offers password issuance only when the caller
+holds `user.create` and the server reports system tier. `/me/permissions` returns a required
+`system_tier` boolean from the same unchanged PDP helper used by the reset guard. Missing or errored
+permission data hides the action. The admin effective-permissions response keeps its existing schema.
+R64 rule 5, doc 07 and the denial detail now state that every reset, including self-reset, requires
+system tier. The backend still evaluates current authority on every request.
+
+Regression proof against unchanged production produced two intended API unit failures, eight web
+failures and five database/API failures. Existing controls passed. After implementation, focused
+checks passed 15 API unit, 53 web and eight database tests. Broader verification passed 5,162 API
+unit tests, 285 response-contract cases, 56 affected integration cases and all 2,384 web tests in
+283 files. Ruff, format, mypy, web lint/build, canonical contract check, authority and site-data
+guards passed. Two API skips are explicitly release-image and opt-in built-image proofs.
+
+Commands include `uv run pytest tests/unit -m unit -q`, the contract-marked
+`tests/integration/test_contract_response_schemas.py`, and the integration-marked users provisioning,
+users admin, authz, me-permissions and credential-reset-authority suites in `apps/api`; `npm test`,
+`npm run lint` and `npm run build` in `apps/web`; and `bash scripts/gen-contracts.sh --check`,
+`bash scripts/check-repo-authority.sh` and `bash scripts/check-no-site-data.sh` from the repository.
+
+The isolated combination with #431 and #421 passed 147 focused API units, 285 response contracts,
+157 affected integrations, 77 web cases, 591 scanner assertions and the full-tree scan. Its contracts
+were canonically regenerated; this proves the shared helper/fixture and schema changes coexist.
+Independent plan and implementation reviews approved specification and engineering quality.
+This dated entry records the tested closure candidate; final independent review and PR CI belong
+to its handoff. The residual is removed on this branch and closes through the reviewed PR merge.
+Four existing OpenAPI date/date-time warnings and a generator FutureWarning remain recorded.
+Live identity-provider and built-image acceptance are not claimed. Permission-cache redesign and
+a self-reset exception remain outside this change.
+
+## Site-data guard covers all four deferred shapes (2026-10-10)
+
+Closure candidate for [#421](https://github.com/CoJoA13/EasySynQ/issues/421),
+`RES-SITE-DATA-GUARD-GAPS`. The scanner detects leading-compression IPv6 while masking only bounded
+indexed-slice spans. It preserves neighboring addresses and whole-token checks, including prose
+punctuation and mapped dotted forms. Default scanning includes textual locks and retains binary
+skipping. The observed public package version is allowed only in its exact reviewed metadata
+contexts. Legacy colon-hex fingerprints accept both byte cases at the existing length, and every
+file-consuming matcher terminates options before filenames.
+
+Against the unchanged scanner, the expanded harness had 275 passing assertions and 316 intended
+failures covering the four gaps and narrow metadata allowance. Existing controls remained green.
+The implementation passed all 591 assertions, shell syntax, the full tracked-tree scan and explicit
+selection of all eight inspected locks. No application or lock content changed.
+
+Commands were `bash -n scripts/check-no-site-data.sh scripts/tests/test-check-no-site-data.sh`,
+`bash scripts/tests/test-check-no-site-data.sh`, `bash scripts/check-no-site-data.sh`, and an explicit
+scan of `apps/api/uv.lock`, `apps/web/package-lock.json`, `infra/images.lock`,
+`packages/contracts/.contract.lock`, `packages/contracts/package-lock.json`, the npm-audit lock
+fixture, and both uv-lock-provenance fixtures. `git diff --check` and the repository authority guard
+passed. On the isolated combined candidate with #430/#431 and canonically regenerated contracts,
+the 591-assertion harness and complete tracked-tree scan passed again. Four separately staged
+synthetic probes in a disposable copy of that complete candidate each failed the real gate with
+the expected rule and file diagnostic: leading IPv6, textual lock, lowercase fingerprint and
+option filename. Removing those probes restored the clean verdict; raw diagnostics were inspected.
+
+Independent plan and implementation reviews approved specification and engineering quality.
+This dated entry records the tested closure candidate; final independent review and PR CI belong
+to its handoff. The residual is removed on this branch and closes through the reviewed PR merge.
+Native Git Bash and ShellCheck were unavailable and remain unverified. Constrained GNU shell PATH
+fixtures prove the dependency boundary separately. Slice recognition is intentionally lexical and
+bounded; the mechanical scanner remains a backstop to R61 human review.
+
+## Interested-parties columns scale with text and accommodate CI rendering (2026-10-10)
+
+Follow-up candidate for [PR #630](https://github.com/CoJoA13/EasySynQ/pull/630) and
+[#559](https://github.com/CoJoA13/EasySynQ/issues/559). The 2026-10-02 evidence below remains
+historical. Its pixel allocations are superseded by `7.5rem / 10rem / 6rem / 8rem` for
+Type/Influence/Status/Last reviewed: 120/160/96/128px at a 16px root. Fixed layout, the flexible
+Party column, and the literal `minWidth={880}` remain. Mantine already expresses that floor as
+55rem, so it scales with the table's text and padding.
+
+The original hosted Chromium run failed four complete-inventory containment cases, with 85 other
+cases passing. Type/Influence/Status badges measured 97.234375/137.984375/74.484375px, each
+2.6875px wider than the earlier local measurement. The precise rendering cause is unproven.
+The revised allocations reserve room for that observed variation. Independent review also found
+that enlarged browser text could overflow the fixed pixel allocations; root-relative widths
+address that defect without changing shared fonts, badges, theme, dependencies, or the harness.
+
+Fresh regression evidence first produced exactly four intended physical-containment failures
+against the unchanged production page after a fresh browser build: a 20px root at 320/1280px, and a
+separate additive 0.25rem badge-section gap at those viewports. The gap is a deterministic rendering
+allowance, not attribution of the CI discrepancy. Tests verify each injected margin and badge width
+increases by 4px, with the root still 16px. Enlarged-root measurements verify 17.5px body text, 12.5px badge
+text, and a 1100px table floor. The unchanged 1px containment tolerance, complete label/glyph
+inventory, long-text clamps, short-name readability, filtering, localized scrolling, visible
+scrollbar on actual overflow, and final-column reachability all remain covered.
+
+The corrected complete Chromium run passed **95/95 cases**, including all **19 legibility cases**,
+with no skips, retries, or flaky results (147.298 seconds wall time). The same tested source and
+browser build passed web lint, production/browser TypeScript builds, and **33 affected component
+and responsive-contract tests**. The first full run passed 93 cases and failed two unchanged harness
+meta tests because the coordinator's report-output environment redirected their child JSON output.
+Correcting only the coordinator's report capture produced the complete pass; repository and harness
+files were unchanged between those runs. Table screenshots with a 20px root at 320/1280px were inspected.
+
+This records local verification of a follow-up candidate. Independent final review, refreshed
+documentation guards, current required GitHub CI, and merge remain pending. A shared
+`source-map-js` security dependency failure is being addressed separately; these browser results
+do not clear that gate. Evidence remains Chromium with synthetic fixtures, without a claim of
+Firefox/WebKit, other locales, live-site, or arbitrary font-size acceptance.
+
+## Interested-parties columns remain stable while filtering (2026-10-02)
+
+Closure candidate for [#559](https://github.com/CoJoA13/EasySynQ/issues/559),
+`RES-IP-REGISTER-COLUMN-JUMP`. Four Chromium regressions reproduced the automatic-layout defect:
+selecting Low influence moved Last reviewed by 5.46875px at 320/1000/1115px and 6.0625px at 1280px.
+Eight measurement probes then captured the current five-column table after fonts settled.
+
+The page now uses fixed layout with Type/Influence/Status/Last reviewed widths of 112/152/88/128px.
+The largest measured compact content was the Community badge with glyph (94.546875px), Medium
+influence badge with glyph (135.296875px), Closed badge with glyph (71.796875px), and Last reviewed
+header button with icon (111px). Adding 16px cell padding and rounding up to an 8px step produced
+those allocations. Party receives the remaining width, 400px at the unchanged 880px floor; its
+existing button is capped at the cell width so the existing text clamp contains long names.
+The literal `<Table.ScrollContainer minWidth={880}>` and the page's existing controls remain intact.
+
+`e2e/register-table-legibility.spec.ts` measures column boundaries across nonempty filter, search,
+restoration, and sort states at four viewports. Its companion cases cover every current type,
+influence, and status label/glyph, null influence, date/Never, sortable header icons, and spaced or
+unbroken 4000-character names/expectations. DOM Ranges prove compact text stays whole, while box
+measurements prove content remains inside its column. Narrow cases prove one localized table scroll
+owner, no document overflow, a visible scrollbar, and final-column reachability. Full-page and
+table-focused far-edge screenshots were captured; the 320px and 1280px table views were inspected.
+
+Fresh evidence: the complete legibility spec passed 13 cases. Removing fixed layout and widths
+failed four stability cases on the original movement; rebuilding the restoration passed nine.
+Narrowing Influence to 40px failed four containment cases on header/badge/text bounds; rebuilding
+the second restoration passed nine. Every source state had its own browser build and source/output
+hash manifests. The affected neighboring selection passed four geometry/rhythm cases; it selected
+no separate accessibility or header-geometry cases. The page and responsive source-contract suites
+passed 33 tests. Full web Vitest passed 2360 tests in 283 files in 350.90 seconds (351.254 seconds
+wall), on the same application/test patch used for the browser evidence. Web lint, browser and
+production TypeScript/build, site-data, repository-authority, and diff checks passed.
+
+Independent implementation review approved specification and engineering with no findings.
+Final review, publication, and GitHub PR/merge evidence remain pending; this entry records a tested
+candidate. Browser evidence is Chromium with synthetic fixtures, not Firefox/WebKit or live-site
+acceptance. Shared fonts, theme, layout, APIs, enums, and dependency locks were not changed. If later
+font/scaffold changes affect this page, repeat its geometry/legibility checks on the integrated tree.
+
+
+## Role picker access requires grant and catalog read (2026-10-02)
+
+Closure candidate for [#435](https://github.com/CoJoA13/EasySynQ/issues/435),
+`RES-ROLE-PICKER-ROLE-READ`. Create user's optional Roles picker and the Users Manage drawer's
+Assign a role controls now require both `permission.grant` and `role.read`. Their catalog queries
+use the same condition, so grant-only callers avoid the denied catalog and its empty selector.
+Account creation without roles and existing-assignment revocation remain available. Administrator
+manual §5.2 names both role-selection permissions.
+
+Fresh component evidence reproduced nine meaningful failures among 42 tests before production
+changes; all 42 passed with the gate change and again after correcting three test query options.
+Coverage includes grant-only, read-only and neither-key callers, cached roles, unresolved permissions,
+zero denied catalog requests, creation with `role_ids: []`, exact existing-assignment revocation, and
+authorized role IDs in both provisioning and assignment requests. Credential, collision, conflict and
+drawer lifecycle regressions also pass.
+
+On the frozen candidate, web lint, typecheck and build passed. The complete web test command,
+`npm --prefix apps/web test`, passed **2,372 tests across 283 files** in 350.76 seconds. Site-data,
+authority and whitespace checks passed before this closure-document update. Independent plan and implementation reviews,
+including scoped re-review of the test-option correction, are accepted. Final documentation guards,
+independent whole-branch review and PR preparation remain pending; this candidate has not shipped.
+
+Permission-cache policy, draft selection state and API authorization/request semantics are preserved.
+Live permission-revocation draft clearing, generic catalog-error presentation, #430 credential-reset
+capability and #436 scope binding are outside this proof. Component tests cover role-picker
+interactions and HTTP requests; no live-backend or real-browser admin role-picker proof is claimed.
+
+## Community Testcontainers imports for fixtures and runtime acceptance (2026-10-02)
+
+Closure candidate for [#570](https://github.com/CoJoA13/EasySynQ/issues/570),
+`RES-TESTCONTAINERS-IMPORT-DEPRECATIONS`. PostgreSQL, MinIO and Redis integration fixtures now
+import their existing classes from `testcontainers.community.*`. The two PostgreSQL imports reached
+by mandatory external-audit acceptance use the same namespace: five substitutions across three test
+files, preserving fixture scopes, lazy imports, images, connection handling, cleanup and runtime limits.
+
+The real blob-verification and Redis notification tests first passed with all three deprecated-module
+warnings. Three literal warning-as-error filters then failed collection at the old PostgreSQL import
+(exit 4). With the substitutions, both tests passed in **7.79 seconds**, exercising actual PostgreSQL,
+MinIO and Redis without those warnings. No warning suppression or dependency update was added.
+
+Complete built-image acceptance passed all **eleven mandatory cases** on this candidate in
+**660.045 seconds**, with zero failures/errors/skips and successful owned cleanup. The runner reported
+`runtime_tests=11`, `mandatory_tests=11` and `runtime_acceptance=passed` with the three exact deprecated
+import messages made fatal in child pytest. API Ruff lint/format, strict mypy across **485 source
+files**, site-data, authority and whitespace checks passed before this documentation update.
+Independent final review and GitHub PR checks remain pending; this candidate has not shipped.
+
+Tested source: base `ddfbf400d1c3025515682ccf56e603570f1e8b6c` plus the five-import patch
+SHA-256 `79cfb2688a9a4ff89cae052e3d2ffb43975e654b1597c8e4e060bb6f81f670ee`.
+Dependency lock digest (SHA-256): `67c888c8fc42c6d8800c19057bfa379c31643b1b5740dd39d57c8e2ade76311a`.
+This checksum identifies the frozen `apps/api/uv.lock` used for the verification above.
+Image ID: `sha256:3744ed283b8506e6bc7e73623f334ed039bc027fb9208ab38c3e21a58c1d00c8`.
+Build input SHA-256: `7ac227fda6eb047a7ab4259656e2c18293f9eed2284616176fce091d9a8d4e7f`.
+Proof input SHA-256: `d0f97476f535f8543d54870801dfa9dc9e903bad63b720719645f9b98c104db3`.
+
+Older warning reports remain historical evidence. Other legacy imports outside this fixture/runtime
+graph and historical audit-runtime failures retain their separate scope and closure contracts.
+
+
+## Stored backup cron and replay-safe scheduled attempts (2026-10-01)
+
+Closure candidate for [#425](https://github.com/CoJoA13/EasySynQ/issues/425),
+`RES-BACKUP-CRON-IGNORED`. The nightly Beat entry formerly dispatched every 86400 seconds from its
+process lifetime without reading the saved cron. It now dispatches each minute; each fresh locked
+policy transaction reads the stored cron, resolves canonical organization timezone once, and uses a
+persisted UTC attempt watermark. Migration `0094_backup_schedule_attempt` adds that nullable marker;
+initial policies start from `created_at`. Explicit CLI/service backups remain immediate.
+
+Owner-approved timing policy (2026-10-01): one catch-up after downtime, a skipped DST local slot at
+the first valid instant after the gap, and a repeated local slot once. Core five-field cron accepts
+names, lists/ranges/steps and Sunday 0/7; restricted day fields use conventional either-day matching.
+Malformed/impossible configuration warns and falls back to daily local 02:00. The fold arithmetic
+preserves the already elapsed first interval so a restart during the repeated hour neither delays
+catch-up nor duplicates a consumed slot. Handled failures consume the attempt and report; busy
+claims and pre-commit crashes leave the prior marker. Capture start, not completion, owns the marker.
+
+A persistent policy-scoped destination file lock covers continued archive threads after database
+lock loss. Completed artifacts carry checksummed/authenticated family and capture-time metadata;
+replay requires the current encryption mode, key authentication for encrypted candidates, and no
+newer due slot. Staging plus unique publication
+preserves existing archives, including stale/invalid candidates. Shared filesystem advisory-lock
+support remains an operator prerequisite, not a claim certified for every mount. Existing encrypted
+and keyless fallback contracts, source dependence, optional legs, WORM and retention scope remain.
+
+The pre-upgrade archive lookup reads only the established destination column rather than loading
+new model columns before Alembic has installed them. A populated pre-0094 policy and the existing
+real migration-lock-timeout upgrade proof cover that compatibility boundary.
+
+Regression evidence includes clock/DST/parser cases, real tar/encryption replay, two PostgreSQL
+workers, database-lock loss with a still-running archive writer, delayed post-file/pre-commit
+recovery, long capture, malformed config, failure alarms, manual compatibility, timezone precedence,
+and populated migration downgrade/re-upgrade/check. Independent review found additional fold,
+pre-claim outage-alarm and truncated-envelope cases; each was reproduced and corrected. Exact fresh
+suite counts and CI evidence are recorded in the PR; broader recovery residuals remain open.
+
+Integration review (2026-10-02) found that Celery's current-date shortcut could skip a missed
+late-minute slot when recovery crossed midnight. Eight regressions reproduced the gap across
+date/month/year and timezone boundaries, stale-archive eligibility and the PostgreSQL path. Occurrence
+search is now anchored at the persisted attempt before comparing with recovery time. All 62 focused
+scheduling tests and 2,520 independent DST occurrence comparisons pass after the correction.
+
+
+## Keycloak admin scripts use Compose-resolved credentials (2026-10-01)
+
+Closure candidate for [#422](https://github.com/CoJoA13/EasySynQ/issues/422),
+`RES-KEYCLOAK-SCRIPT-DOTENV-ESCAPES`. The duplicated `env_val` parser in both host break-glass
+scripts stopped at the first double quote even when escaped, sending a truncated admin password.
+Both now share `scripts/lib/keycloak-admin.sh`: Compose resolves the project name and the final
+Keycloak service credentials using host/.env precedence and the complete active file set recorded
+on the running deployment. Missing, inconsistent or foreign-checkout deployment files fail closed.
+A validation-only Compose extension retains the explicit nonempty source-password requirement;
+no service configuration is changed. NUL-framed validated fields retain whitespace and trailing
+newlines without evaluating dotenv as shell code. Raw parser diagnostics and resolved models are
+never printed. Native Git Bash host paths are converted separately from the container path.
+
+The tools remain incident-recovery helpers, attach with `exec -T` only, and preserve exact-user
+lookup, identity rechecking and existing create/reset/lockout handling. They do not start or
+recreate services. Other dotenv helpers are unchanged. Compose resolves the files as they exist
+now: these scripts do not attest that an edited .env matches a previously started container.
+
+Evidence: the escaped-quote regression failed at the authentication argv in BOTH original scripts.
+The regression suite drives both complete script entry points through the real Compose parser
+using synthetic-only data, intercepting discovery and exec so no real accounts or services are
+changed. It covers escaped quotes/backslashes, trailing backslashes/newlines, literal hashes,
+whitespace, CRLF, interpolation, host precedence, active production/offline overlays, duplicate
+container labels, defaults, malformed/missing/empty credentials, invalid final service values and
+ambiguous/missing/foreign deployments. Native Windows path handling has a synthetic path-conversion
+proof; actual Windows execution is not claimed. Fresh results and exact-head CI are recorded in
+the associated PR.
+
+## Provisioning post-commit readback recovery (2026-10-01)
+
+Closure candidate for [#433](https://github.com/CoJoA13/EasySynQ/issues/433),
+`RES-PROVISION-POST-COMMIT-READ-FAILURE`. The Keycloak account, application user and requested roles
+commit before the response's user refresh and role-name reads. A database failure in either read used
+to produce an unhandled error while the committed account still lacked a credential.
+
+Database errors in that readback block now return the existing `keycloak_unavailable` recovery code,
+which prompts the UI to refresh the roster, with explicit guidance that the user was created, no
+temporary password was set, and the operator should reload and reissue rather than retry create.
+The message identifies a readback failure without exposing database diagnostics. The earlier creation
+commit and later credential issuance/audit boundaries remain unchanged; unrelated exception types
+are not translated into a database recovery response.
+
+Fresh local evidence: both refresh and role-name fault injections failed on `2997ba6`. Each proves a
+separate database transaction sees the committed user before the fault fires, then checks that the
+user, roles and creation audit survive, no credential was issued or audited, and the advertised
+reissue path succeeds without another create. With the fix, all **29 provisioning integration tests**
+pass. The associated draft PR records static checks, independent review and exact-head CI separately;
+this candidate has not shipped.
+
+
+## Keycloak create Location validation (2026-10-01)
+
+Closure candidate for [#432](https://github.com/CoJoA13/EasySynQ/issues/432),
+`RES-KEYCLOAK-LOCATION-SUBJECT`. The provisioning client previously trusted any non-empty last segment
+of a create response's `Location`; a missing identifier in `.../users/` therefore returned `users`
+instead of resolving the created account. It now accepts only a user resource immediately under the
+actual create collection path, including a deployment context path, with no query or fragment.
+Malformed or foreign paths use the existing verified exact-username lookup and preserve its failure
+behavior. Subjects remain opaque (including percent-encoded values); no UUID restriction is added.
+A differing advertised public origin is supported because the client extracts the ID without following
+the returned URL.
+
+Fresh local evidence: 13 new regression cases failed on `2997ba6`. Review added four failing cases for raw whitespace/control characters and malformed percent escapes,
+which are now rejected before URL parsing. With the fix, 98 affected client and
+identity unit tests and all 27 provisioning integration tests pass. Coverage includes missing IDs,
+foreign realm/resource paths, extra path segments, malformed URLs, query/fragment ambiguity, a failed
+or absent fallback lookup, opaque subjects and a deployment context prefix. Ruff/format and strict
+mypy across 483 source files pass. The associated draft PR reports independent review and exact-head
+CI separately; this candidate has not shipped.
+
+Integration review also identified an exact-username fallback returning an empty string ID. Two
+regressions (missing and malformed Location) reproduced acceptance of that unusable binding. The
+fallback now requires a non-empty subject too; both cases and all 100 affected client/identity unit
+tests pass, as do the 27 provisioning integration cases. Non-empty opaque subjects remain supported.
+
+
+## Create-user collision submission snapshot (2026-10-01)
+
+Closure candidate for [#434](https://github.com/CoJoA13/EasySynQ/issues/434),
+`RES-CREATE-USER-PENDING-EDITS`. The create-user form remained editable while provisioning was pending,
+but collision recovery combined the returned Keycloak subject with the current form. An operator
+could therefore link the original identity using another person's subsequently entered metadata.
+
+Create now takes an explicit copy of the submitted form, including its role list. A collision binds
+that submission to the returned subject, and link recovery uses the bound display name, username
+fallback and email. Its role-assignment warning uses the same submission. The editable form remains
+the draft for choosing a different username and resubmitting. Password-cache cleanup and server
+permission checks are unchanged; the separate role-picker permission residual remains open.
+
+Fresh local evidence: two delayed-response regressions edit identity fields and roles during a pending
+create, then assert the original link payload (including blank-name/email fallback). Both failed on
+`2997ba6` and passed with the fix. A further case proves a later submission binds its own returned
+identity and metadata. The component suite passed **19 tests**; the complete `npm test` run passed
+**2,360 tests across 283 files**. `npm run lint`, `npm run build` and formatting checks passed.
+Independent review found no actionable findings. The associated draft PR records exact-head CI
+separately; this evidence does not claim the change has shipped.
+
+
+## Setup acknowledgment audit-history isolation (2026-10-01)
+
+Closure candidate for [#567](https://github.com/CoJoA13/EasySynQ/issues/567),
+`RES-INTEGRATION-SETUP-ORDER-FAILURE`. The setup acknowledgment test formerly expected no setup audit
+rows anywhere in the shared database. `_reset_uninitialized` correctly preserves append-only audit
+history, so a preceding backup-configuration test made that assertion fail despite all denied
+requests behaving correctly. On pristine `2997ba6`, running
+`test_backup.py::test_configure_backup_requires_permission` followed by
+`test_setup.py::test_authenticated_setup_surface_requires_credential_acknowledgment` reproduces the
+failure (one passed, one failed). The complete backup module followed by that setup test also
+reproduces it (20 passed, one failed).
+
+The test now creates a legitimate earlier profile mutation through the authenticated API, resets
+setup, and snapshots the matching setup audit IDs before issuing the unacknowledged requests. It
+requires the same set afterward, so earlier history is accepted while any newly appended setup event
+still fails. The seeded history makes the old empty-list assertion fail even when this test runs
+alone. All seven HTTP/status-code checks and the state/configuration/probe/enqueue assertions remain;
+no production code, audit deletion, fixture reset, shard boundary or duration file changes.
+
+Fresh local evidence: the seeded standalone regression failed before the assertion change; the
+original two-test order and its reverse each pass both cases after the change. The full single-process
+`pytest tests/integration -m integration -q` run passed **1,262 tests**, with two existing
+management-review shared-state skips and 285 contract tests deselected, in 977.56 seconds. Collection
+confirmed that no integration-marked tests live outside that directory. Sharding was not used.
+Independent review found no actionable issue. The associated PR reports exact-head CI separately.
+
+## Encrypted restore-drill destination archive (2026-10-01)
+
+Closure candidate for [#420](https://github.com/CoJoA13/EasySynQ/issues/420),
+`RES-RESTORE-DRILL-PLAINTEXT-ARCHIVE`. The drill packs locally and writes only the full AES-256-GCM
+archive and ciphertext checksum to the policy destination. It authenticates and decrypts the returned
+destination bytes before restoring locally. Missing/placeholder `BACKUP_ENCRYPTION_KEY` returns FAIL
+before capture; deterministic-stamp cleanup covers interrupted ciphertext/sidecar writes. Cleanup
+remains best-effort, so a denied unlink can leave ciphertext. Legacy plaintext residue requires
+operator cleanup. OWNER-role execution, the integrity triad, scratch-target WORM protection,
+source-store dependence and durable backups' separate keyless fallback are unchanged.
+
+Fresh local proof against `2997ba6`: nine new unit cases failed before the fix and passed afterward;
+both pg_dump-backed destination cases failed before the fix and passed afterward. The complete backup
+integration module passed all 22 cases, including success/failure destination inspection, full dump
+round-trip, real blob corruption and scratch cleanup. The nine unit cases cover absent/placeholder
+keys, success and post-restore failure, interrupted ciphertext/sidecar writes, checksum/authentication
+failure and unlink denial. Existing scratch-guard tests now use real packing/encryption instead of
+returning a nonexistent packed path. Retained-archive selection excludes both legacy and encrypted
+drill residue. The runbook describes the new key requirement and artifact lifecycle.
+
+The combined backup/setup run passed 106 cases and failed
+`test_authenticated_setup_surface_requires_credential_acknowledgment` on prior audit rows.
+The same ordering fails on pristine `2997ba6` (20 passed, one failed), independently confirming the
+open `RES-INTEGRATION-SETUP-ORDER-FAILURE` / #567; this slice does not change that test or weaken it.
+The historical deployment documents named in #420 were already replaced by redaction records;
+no removed site-specific document was restored. CI and merge status belong to the linked PR.
+
+### Restore-drill scope reconciliation (2026-10-01)
+
+[#616](https://github.com/CoJoA13/EasySynQ/pull/616) implements only the bounded
+`RES-RESTORE-DRILL-PLAINTEXT-ARCHIVE` closure. The August execution-order design was ratified
+by #444 and assigned #420 to `S-backup-legs`. The later
+[September 22 residual contract](https://github.com/CoJoA13/EasySynQ/blob/2997ba60100059f7186025402c966e92b08fdb67/docs/open-residuals.md#L883),
+explicitly identified as authoritative in the
+[owner's #420 comment](https://github.com/CoJoA13/EasySynQ/issues/420#issuecomment-5783603360),
+permits encrypting the full transient archive with the backup key and requires passing/failing
+pg_dump-backed destination checks. The owner's October 1 approval of the prepared bounded draft
+permits this narrow closure before the larger recovery programme.
+
+This is a sequencing exception for the drill's plaintext-destination exposure, not completion of
+`M-01`/`S-backup-legs` or a waiver of D-B4. Exact current-key identity and bounded key history,
+mandatory realm/config/checkpoint legs, shared typed backup verdicts, and source-independent
+recovery remain unfulfilled broader requirements. The existing static envelope identifier
+`BACKUP_ENCRYPTION_KEY:sha256-v1` supplies format compatibility, not proof of exact current-key
+identity. Durable keyless/partial fallback remains a documented limitation, not a recovery guarantee.
+The [open recovery contract](open-residuals.md#res-source-independent-recovery) remains open.
+The setup manual now describes the encrypted transient round-trip and these limits consistently.
+
+## Dependabot repair follow-up (2026-10-01)
+
+After [#608](https://github.com/CoJoA13/EasySynQ/pull/608) merged at `acebf627`, the remaining
+approved repairs continued in [#610](https://github.com/CoJoA13/EasySynQ/pull/610) and
+[#611](https://github.com/CoJoA13/EasySynQ/pull/611). R87 records the follow-up scope and selections.
+The earlier green scans did not establish a permanent clearance: the new
+[#610 run](https://github.com/CoJoA13/EasySynQ/actions/runs/36856752738) reported eight API and
+four web fixed-version blockers. A private rebuild and scan reproduced those counts using
+Trivy `0.74.0` and the CI flags. Reports and package/advisory inventories remain private.
+
+The repair candidate based on #610 head `ce91b7ea` selects compatible PyJWT `2.15.0` and urllib3
+`2.8.0`, plus targeted upgrades of existing base packages in both Dockerfiles. Both rebuilt
+images then passed the unchanged fixed-version gate with zero blocking and zero secret findings;
+47 API and 43 web no-fix findings remained open. Offline inspection confirmed the selected
+packages and retained non-root users. The API's offline startup/image-hardening proof passed
+all 30 tests. Live pip-audit reported no findings, the web npm policy reported zero blockers,
+and the contracts audit reported zero vulnerabilities. All 274 npm-policy, 393 image-gate,
+129 pip-audit-runner regressions and the exact installed contract-tool guard passed.
+
+The same run exposed October rollover in the audit-history tests: their fixed September events
+fell outside both the migration's June–August seeds and the fixture's October–December runway.
+The affected module reproduced two failures and one pass. Its own fixture now idempotently
+creates the historical September partition after migration; all three tests then passed.
+Fixed timestamps, assertions, the shared current-month runway, and production behavior remain
+unchanged. These local results apply to the repair candidate; each final PR head still requires
+the complete CI gate, mandatory runtime acceptance and resolved review conversations before merge.
+
+## Dependabot repair verification (2026-09-30)
+
+This is dated verification for **unmerged** [#608](https://github.com/CoJoA13/EasySynQ/pull/608),
+[#610](https://github.com/CoJoA13/EasySynQ/pull/610), and
+[#611](https://github.com/CoJoA13/EasySynQ/pull/611), not a shipped baseline or merge approval.
+[R87](decisions-register.md#r87--scoped-security-dependency-repairs-for-dependabot-prs-608-610-and-611--2026-09-30)
+records the binding owner-approved scope and selections. The evidence below applies to the tested
+repair commits; each later documentation commit still requires its own successful gate and resolved
+review conversations before completion.
+
+**Live verification evidence.** On the resulting locks, `node scripts/check-npm-audit.mjs`
+exited 0 with `blocked: 0` for each PR; the actual audit ran without a timeout or registry error.
+All 274 npm policy regressions passed, and the exact installed image versions were checked with
+networking disabled. Both rebuilt images for every PR passed the unchanged built-image
+fixed-version threshold with zero fixable HIGH/CRITICAL findings and zero secret findings.
+The full CI security jobs passed on the corresponding repair commits:
+[#608](https://github.com/CoJoA13/EasySynQ/actions/runs/36659485523/job/109710968077),
+[#610](https://github.com/CoJoA13/EasySynQ/actions/runs/36659493871/job/109711013506), and
+[#611](https://github.com/CoJoA13/EasySynQ/actions/runs/36659503120/job/109711017210).
+These jobs include the live audit and both image scans. Those scans also reported no-fix findings;
+passing the fixed-version threshold did not establish blanket image-security clearance.
+
+**Contract-toolchain follow-up.** Newly reported brace-expansion advisories subsequently blocked
+these same PRs' contracts audits. A targeted compatible patch refresh selects `brace-expansion`
+`2.1.7` in `packages/contracts/package-lock.json`, retaining every exact contract-tool version.
+For each resulting contract lock, `npm --prefix packages/contracts audit --package-lock-only
+--audit-level=high` exited 0 with zero vulnerabilities; the exact installed-tool guard passed and
+`bash scripts/gen-contracts.sh --check` preserved the committed generated contracts. This is a
+repair of the same required CI gates, with no exception, major upgrade or guard relaxation.
+
+Earlier complete CI gates passed for the authority repair commits:
+[#608](https://github.com/CoJoA13/EasySynQ/actions/runs/36661450893),
+[#610](https://github.com/CoJoA13/EasySynQ/actions/runs/36661459968), and
+[#611](https://github.com/CoJoA13/EasySynQ/actions/runs/36661466946).
+These historical results do not claim success for a later PR head.
+
+## S-harness-requestfailed-race — preserve exact fail-closed outcomes
+
+2026-09-24, based on merged #604 (`65ad5e2`). Closes
+`RES-HARNESS-PROBE-REQUESTFAILED-RACE` (#595) when this fix merges. The probe now owns its
+request-failure observation through a fixture that depends on the page. Its teardown awaits the
+observation before Playwright closes the page, even when the interceptor's intentional fatal has
+already interrupted the test body. The interceptor and its abort/fatal behavior are unchanged.
+
+The meta spec exercises both ordinary timing and a delayed observation. The delayed predicate
+asserts the test is already failed before completing, proving the losing order occurred. Both
+variants retain the exact single fatal error, abort evidence, attachments and report totals.
+Before the fix, the new regression failed with two errors including `page.waitForEvent: Test ended.`;
+removing only the fixture teardown await reproduced that same failure. Restoring it passed all
+three focused meta tests. Independent source review found no material issues.
+
+Fresh local verification: `npm run lint`, `npx tsc -p tsconfig.browser.json --noEmit`,
+`npm run build`, `npm test` (**283 files, 2,357 tests**) and `npm run test:browser`
+(**81 tests**) all passed from `apps/web`. Full web verification was recorded by process job
+`job-mugfrp3g-625ea1e2` with exit 0. This is test-harness-only work; API runtime and deployment
+behavior are unchanged. Issue #595 remains open until the reviewed fix merges.
+
+## S-project-native-automation — verified intake and status lifecycle
+
+2026-09-24, repository baseline `df79772` after reviewed squash merge #602. Resolves
+`RES-PROJECT-BOARD-AUTOMATION` through the native EasySynQ project UI in the owner's signed-in
+browser. The original record reported stale #551/#584 and missing #599/#600; those were reconciled
+in the earlier audit. Five newly enabled workflows now provide repository-scoped auto-add,
+item-added → Todo, item-closed → Done (issues and PRs), PR-merged → Done, and item-reopened → Todo.
+The pre-existing auto-add-sub-issues workflow stays enabled: six enabled workflows total.
+Auto-close issue is confirmed off. No token, Action, webhook or broader permission was introduced.
+
+Acceptance record [#603](https://github.com/CoJoA13/EasySynQ/issues/603) was created without manually
+adding it to the project or setting its initial status. Project API readback showed automatic
+membership and Todo. Closing it produced Done; reopening it produced Todo. Manually moving its card
+to Done left the issue OPEN, confirming the reverse closure safeguard, then the probe was closed
+and retained as evidence. The merged-PR workflow's enabled Done configuration was read back in the
+UI; no new PR was merged solely to test it.
+
+Comparing every open issue and PR with project membership found no missing items. Already-merged
+#602 still showed In review because it predated activation, so it was explicitly reconciled to
+Done. Existing priorities, ledger IDs and blocked labels were preserved; #601's obsolete
+owner-decision label was removed. Reopened items return to triage; ready-for-review PR status and
+any still-applicable blocked reason are reconciled there, as documented in the runbook. The Wiki
+tracking page points to this procedure. Issue #601 remains open until the closure documentation
+merges; live workflow configuration and the probe are already complete.
+
+Verification: the existing documentation-reading selection (11 files) passed **392 tests, one
+image-build opt-in skip**. `just authority-check`, `bash scripts/check-no-site-data.sh` and
+`git diff --check` passed. Before/after project API snapshots confirmed unchanged Priority and Ledger
+record values for every pre-existing item and unchanged labels/statuses outside the intended
+#601/#602 reconciliation. Application and deployment behavior did not change.
+
+## Repository operations audit — September 24, 2026
+
+Audited source at `985cccf4215826b5fc81b6b8e7324cadbbc35fdb`, the live GitHub settings,
+Wiki, issues and project. This is repository-operations and CI coverage evidence, not an exhaustive
+application security audit or production-readiness certification. Repository documentation changes
+remain a candidate until their follow-up PR merges; the settings and tracking changes below were
+applied and read back during the audit.
+
+| Requirement or risk | Evidence and outcome |
+| --- | --- |
+| PR-only, up-to-date, squash-only integration | Active `main` ruleset, no bypass actors, required `gate`, conversation resolution, deletion/force-push protection. Zero required approving reviews: review is a process obligation, not independently enforced. |
+| CI selection and failure handling | Existing workflow plus 172 shell assertions and 44 semantic tests passed. Covers docs/code lanes, merge-parent diffs, conditional jobs, complete aggregate dependencies, immutable action refs, credential handling and timeouts. |
+| Security feature configuration | Private reporting, dependency alerts/updates, secret scanning/push protection and weekly CodeQL default setup verified. Zero open alerts returned by each of the Dependabot, CodeQL and secret-scanning APIs; this does not clear advisory image findings or untested runtime behavior. |
+| Server-side action pin enforcement | Actions permissions API changed `sha_pinning_required` from false to true and returned true on readback. Token default remains read-only, with PR approval by Actions disabled. |
+| Issue/board traceability | Twelve pre-move issue titles and board Ledger record fields now match their existing residuals. Closed #551 and #584 moved to Done; #599 and #600 added for review. After adding #601, all 42 residuals map one-to-one to open issues and board records; all open issues and the two open PRs are present. |
+| Durable board maintenance | Native workflow controls could not be inspected from the signed-out browser. Exact lifecycle/backfill criteria are registered in `RES-PROJECT-BOARD-AUTOMATION` and issue #601; manual reconciliation does not close that record. |
+| Documentation entry points | README gains a Wiki link; Wiki tracking links point directly to the project, clarify closure semantics, and explain CI coverage limits. The runbook records the settings, maintenance procedure and approval/release boundaries. |
+| CD and release claims | Protected `v*` tags run full validation and image-pin checks. No asset publication/deployment job or published GitHub release existed at inspection. No deployment automation was activated. |
+
+Known runtime gaps were retained under existing issues, not duplicated: real Tika OCR (#592),
+live Celery/Beat and long-lived SSE (#598), integration order dependence (#567), the browser
+harness race (#595), and source-independent recovery (#557). CI remains broad but partial evidence
+for these boundaries. CodeQL and pip-audit remain advisory under the existing contract. No
+application behavior, dependencies, schemas, migration tree or security acceptance thresholds changed.
+
+Verification: `bash scripts/tests/test-ci-hardening.sh` **172 passed**;
+`apps/api/.venv/bin/python -m pytest -q apps/api/tests/unit/test_ci_workflow.py` **44 passed**;
+`./scripts/doctor.sh contributor` outside the sandbox **PROFILE_READY** (SELinux observation was
+unverified but not required by this host state). The initial sandbox doctor could not resolve the
+managed Python or access Docker; the host run resolved those environment limitations. Live API
+readbacks and a local comparison of ledger IDs, issue titles, project membership and Ledger record
+fields confirmed the tracking results above. The workflow's documentation-reading selection
+(`apps/api/.venv/bin/python -m pytest -q <11 selected files> -m unit`) passed **392 tests, one skip**;
+the skipped test requires `EASYSYNQ_IMAGE_PROOF=1` and builds the API image. `just authority-check`,
+`bash scripts/check-no-site-data.sh` and `git diff --check` passed. The site-data guard initially
+rejected user-scoped project URLs in repository docs; those docs retain the sanctioned repository
+Projects link while the external Wiki links directly to the board. Full application, integration and browser suites were
+not rerun for this documentation/settings-only audit; baseline counts were not advanced.
+
 ## Current residual index
 
 Current residuals were migrated without reclassification to
@@ -45,6 +1136,82 @@ evidence; older `Named residuals` text inside shipped entries is likewise a hist
   sink `enabled` false→true should bump it, or the grace window is measured from creation.
 
 ## TEST HARNESS RELIABILITY
+
+### S-dependabot-triage — the pre-move Dependabot backlog resolved, one measured change at a time
+
+**2026-09-22/23; closes `RES-DEPENDABOT-BACKLOG-TRIAGE`.** Merged by squash, in order: #548
+`f4ff6af`, #541 `0b4ff2f`, #550 `d0fd179`, #553 `21d4a60`, #547 `2c37e59`, #591 `2f2aefc`, #587
+`3b7b263`, #594 `55fef93`. Dependency, images-lock, test-pin and documentation changes only. There
+is no migration (head stays `0093`), no contract change, and no permission change.
+
+**What shipped.** Each of the eight pull requests open since before the move was either merged
+through `gate` or closed with its reason on the thread. All were first rebased onto `main` so every
+verdict came from the R86 workflow, not a stale run.
+- **#548** setup-uv 10.0.1 → 10.1.0. Dependabot kept the new SHA-pin format with its version
+  comment.
+- **#541** @redocly/cli 2.53.0 → 2.53.2. Two tests pin the toolchain version exactly on purpose, and
+  both were moved after review: the CLI ships bundled, and js-yaml stays on the 4.3.2 override.
+- **#550** Python group: alembic 1.20, ruff 0.16.7, pypdf 6.18.1, datamodel-code-generator 0.81,
+  schemathesis, boto3, aiosmtplib. Regenerated contract models are byte-identical, and
+  ruff/mypy/`alembic check` are clean.
+- **#553** keycloak 26.7, same tag with a rebuilt digest, plus the single-entry images-lock line the
+  Keycloak FROM check requires.
+- **#547** gotenberg 8.36 → 8.37, plus its images-lock line.
+- **#587** web group, the successor of #551: react-router 7.18.4 and vitest 5.0.1. The approved
+  security-lock pin was moved after review.
+- **#543** mailpit was closed by Dependabot because `main` already carried v1.31.1.
+- **#478** Tika 4.0 was closed; see below.
+
+**Load-bearing findings.**
+- **gotenberg** (CI cannot see this: the render tests short-circuit before any live renderer). The
+  three hand-built documents were rendered through the pinned 8.36 and 8.37 images. **8.36 silently
+  drops OMML equations from DOCX controlled copies**, and 8.37 renders them (upstream #1644:
+  8.30 removed `libreoffice-math`). The ODT and ODS output was identical: same text, and pixel
+  deltas of 0 or 58 anti-aliasing pixels.
+  - Because the rendition cache never re-renders on its own, any Effective DOCX with equations
+    cached since the 8.34 adoption (2026-06-16) needs `./scripts/easysynq mirror rebuild` after
+    deploy.
+- **Tika** (CI cannot see this either: the unit suite mocks the transport and the integration suite
+  uses a fake extractor). Real 3.3.1 and 4.0.0 sidecars were driven with the extractor's exact
+  requests. **4.0.0 silently ignores `X-Tika-PDFOcrStrategy`**: a `no_ocr` request OCRs a scanned
+  PDF, so OCR cannot be switched off and `ocr_used` would misreport. **It also ignores
+  `X-Tika-OCRLanguage`**: a `deu` scan OCRs as English.
+  - The extractor's comment claiming the headers were verified identical on 4.0.0 was wrong, and
+    #591 corrects it. #591 also refuses Tika majors (pinned by a test, mutation-checked) and
+    registers `RES-TIKA-4-OCR-CONTROL`.
+- **Digests.** Every new images-lock digest was verified independently: the pulled RepoDigest for
+  both images, plus the registry index for gotenberg.
+  - ⚠ This deviates from the residual's closure contract, which asked for `just images-update` on
+    each branch. That recipe re-resolves every floating tag (`postgres:18`, `redis:8`, `caddy:2`)
+    and would have widened each pull request past its own update, so targeted single-line edits
+    were used instead.
+
+**Traps.**
+- The ruleset's up-to-date rule makes merging strictly sequential: each merge moves `main` and
+  every queued PR re-runs. A scripted chain (update branch → wait for `gate` on the new head → check
+  unresolved threads → squash) merged the batch over about four hours, stopping at the first red.
+- It stopped once. After its update, #587 failed only the Chromium harness self-test. The
+  fail-closed probe's pending `page.waitForEvent("requestfailed")` can reject with "Test ended"
+  after the interceptor's fatal throw, adding a second error that the meta spec's exact-one
+  assertion rejects. It was the only `web-browser` failure in the previous 60 runs, and nothing
+  #587 changed runs in Playwright.
+  - The failed jobs were re-run once to unblock the bump. The race is registered as
+    `RES-HARNESS-PROBE-REQUESTFAILED-RACE` (#594, issue #595) rather than treated as fixed.
+- Pushing a reviewed fix onto a Dependabot branch ends Dependabot's own rebasing of it. GitHub's
+  update-branch endpoint kept those branches current instead.
+
+**Test deltas (measured).**
+- API unit collected: **4,997 → 5,000** on `a4e853a` → `55fef93`. The +3 is two tests from #590 and
+  the Tika refusal test from #591.
+- CI: **4,999 passes** and one release-only skip on run 35822550793.
+- Unchanged: integration 1,262 passed / 2 skipped, response contracts 285, web 2,357 (the vitest
+  5.0.1 bump changed no count), and Chromium 80.
+
+**Honest deferrals.**
+- The Keycloak rebuild, the gotenberg pull and the one-time mirror rebuild are operator actions and
+  have not been performed on any installation.
+- Dependabot PR #593 (redis-py 6.4 → 8.1) opened after this record and is ordinary new work.
+- `RES-TIKA-4-OCR-CONTROL` and `RES-HARNESS-PROBE-REQUESTFAILED-RACE` stay open.
 
 ### S-ci-changes-merge-parent — `changes` diffs from the merge commit's first parent
 

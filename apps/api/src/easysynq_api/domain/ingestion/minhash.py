@@ -15,15 +15,19 @@ deliberately well BELOW 0.85, so recall at 0.85 is ≈1.0 (it over-emits low-sim
 which the exact re-verify drops — the safe direction for a one-shot import).
 
 Worst case (a pathological all-similar corpus) the candidate set is O(n^2); for v1 the in-process
-path is the bounded/S-profile realization (doc 09 §14 — OpenSearch is the M/L drop-in); the dedup
-worker heartbeats the source-root lock across the build so a long run is never mis-reaped.
+path is the bounded/S-profile realization (doc 09 §14 — OpenSearch is the M/L drop-in). The dedup
+detector checkpoints completed computation batches, including LSH bucket placements and pair
+insertion attempts, to renew source-root ownership and record progress between batches. This is
+a work-unit cadence, not a wall-clock bound: individual normalization, shingle, signature, Jaccard,
+band-hash and allocation/hash operations remain synchronous. So do the sweep of singleton buckets,
+component assembly, component score scans and sorting.
 """
 
 from __future__ import annotations
 
 import hashlib
 import random
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import Any
 
 # ── Determinism-locked signature math (intentionally NOT runtime config) ──────────────
@@ -95,6 +99,28 @@ def _band_key(band: tuple[int, ...]) -> bytes:
     return hashlib.blake2b(b"".join(x.to_bytes(8, "big") for x in band), digest_size=16).digest()
 
 
+def iter_lsh_candidate_work(
+    sigs: Mapping[Any, Sequence[int]],
+) -> Iterator[frozenset[Any] | None]:
+    """Yield ``None`` after each bucket append, then every same-bucket pair attempt in order.
+
+    Pairs repeat across bands; consumers insert each pair before counting that attempt as completed
+    work. The iterator retains the existing buckets and yields one operation at a time.
+    """
+    buckets: dict[tuple[int, bytes], list[Any]] = {}
+    for key, sig in sigs.items():
+        for b in range(LSH_BANDS):
+            band = tuple(sig[b * LSH_ROWS : (b + 1) * LSH_ROWS])
+            buckets.setdefault((b, _band_key(band)), []).append(key)
+            yield None
+    for members in buckets.values():
+        if len(members) < 2:
+            continue
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                yield frozenset((members[i], members[j]))
+
+
 def lsh_candidate_pairs(
     sigs: Mapping[Any, Sequence[int]],
 ) -> set[frozenset[Any]]:
@@ -102,18 +128,10 @@ def lsh_candidate_pairs(
     (a cheap blocking step; the caller re-verifies each pair with ``exact_jaccard``). Deterministic:
     band order + blake2b bucket keys are stable. Keys are caller-defined (hashable + sortable; the
     dedup worker passes ``import_file`` UUIDs)."""
-    buckets: dict[tuple[int, bytes], list[Any]] = {}
-    for key, sig in sigs.items():
-        for b in range(LSH_BANDS):
-            band = tuple(sig[b * LSH_ROWS : (b + 1) * LSH_ROWS])
-            buckets.setdefault((b, _band_key(band)), []).append(key)
     pairs: set[frozenset[Any]] = set()
-    for members in buckets.values():
-        if len(members) < 2:
-            continue
-        for i in range(len(members)):
-            for j in range(i + 1, len(members)):
-                pairs.add(frozenset((members[i], members[j])))
+    for pair in iter_lsh_candidate_work(sigs):
+        if pair is not None:
+            pairs.add(pair)
     return pairs
 
 

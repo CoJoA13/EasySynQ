@@ -26,9 +26,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import create_async_engine
+from testcontainers.community.postgres import PostgresContainer
 from testcontainers.core.container import DockerContainer, ExecConfig
 from testcontainers.core.labels import LABEL_SESSION_ID, SESSION_ID
-from testcontainers.postgres import PostgresContainer
 
 from easysynq_api.db.models.audit_checkpoint import AuditCheckpoint
 

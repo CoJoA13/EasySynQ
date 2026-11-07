@@ -627,6 +627,9 @@ paths:
         discovering their own affordances). A coarse SYSTEM-scope answer by default; the optional
         scope_level/scope_id refine it (e.g. document.create at a DOC_CLASS). Per-document write
         buttons gate on the document's capabilities block (GET /documents/{id}) instead.
+        system_tier reports the caller's administrative tier using the same effective
+        non-content-only permission.grant rule as the server guards, always at SYSTEM scope
+        regardless of scope_level/scope_id.
       parameters:
         - name: scope_level
           in: query
@@ -642,10 +645,10 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: The caller's effective permissions with provenance.
+          description: The caller's effective permissions with provenance and administrative tier.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/EffectivePermissions" }
+              schema: { $ref: "#/components/schemas/MyEffectivePermissions" }
         "401":
           description: Missing, invalid, or expired token.
           content:
@@ -803,7 +806,16 @@ paths:
                   temporary_password: { type: string }
                   password_delivery: { type: string, enum: [shown_once] }
         "403": { $ref: "#/components/responses/ProblemResponse" }
-        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: >-
+            A username/email collision, or keycloak_subject_missing if the newly linked identity
+            disappeared before credential issuance. For keycloak_subject_missing, the committed
+            EasySynQ user and role audits remain; no temporary password was issued. Reload the
+            roster and follow Administrator & IT Manual section 5.3.1, Missing linked sign-in
+            account recovery.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "422": { $ref: "#/components/responses/ProblemResponse" }
         "502": { $ref: "#/components/responses/ProblemResponse" }
         "503": { $ref: "#/components/responses/ProblemResponse" }
@@ -883,7 +895,14 @@ paths:
                   password_delivery: { type: string, enum: [shown_once] }
         "403": { $ref: "#/components/responses/ProblemResponse" }
         "404": { $ref: "#/components/responses/ProblemResponse" }
-        "409": { $ref: "#/components/responses/ProblemResponse" }
+        "409":
+          description: >-
+            user_not_linked, or keycloak_subject_missing when the linked sign-in account cannot be
+            found. No password was issued. Verify the configured realm, then follow Administrator
+            & IT Manual section 5.3.1, Missing linked sign-in account recovery.
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
         "422":
           description: >-
             two_tier_violation (every existing linked user credential reset unconditionally requires
@@ -7342,6 +7361,7 @@ components:
             - invalid_transition
             - keycloak_email_exists
             - keycloak_not_configured
+            - keycloak_subject_missing
             - keycloak_unavailable
             - keycloak_username_exists_unlinked
             - last_admin
@@ -7744,6 +7764,26 @@ components:
         permissions:
           type: array
           items: { $ref: "#/components/schemas/EffectivePermissionEntry" }
+
+    MyEffectivePermissions:
+      type: object
+      additionalProperties: false
+      required: [scope, permissions, system_tier]
+      properties:
+        scope:
+          type: object
+          additionalProperties: true
+          description: The scope the permissions were resolved at.
+        permissions:
+          type: array
+          items: { $ref: "#/components/schemas/EffectivePermissionEntry" }
+        system_tier:
+          type: boolean
+          description: >-
+            Whether the caller satisfies the server's effective non-content-only permission.grant
+            tier rule at SYSTEM scope, including scope, predicates and deny precedence. Evaluated
+            independently of the scope requested for permission keys; user.create alone does not
+            confer this tier.
 
     DistributionEntry:
       type: object

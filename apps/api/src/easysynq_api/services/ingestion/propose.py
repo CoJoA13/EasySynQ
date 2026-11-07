@@ -33,6 +33,7 @@ from ...domain.ingestion.normalize import extract_doc_code
 from ..vault.mirror import ClauseRef, fetch_top_words, ia_placement_dir
 from . import locks
 from . import repository as repo
+from .progress import PipelineProgressStopped, heartbeat_batch
 from .service import _fail_run, _now, emit_import_event_system
 
 logger = logging.getLogger("easysynq.ingestion.propose")
@@ -111,8 +112,6 @@ async def rebuild_proposals(
     rows = list(await repo.included_files_with_context(session, run_id, version))
     clusters = await repo.list_dupe_clusters(session, run_id)
     families = await repo.list_version_families(session, run_id)
-    if heartbeat is not None:
-        await heartbeat()
 
     # keep-item = included MINUS (non-canonical dup members + non-effective family members), built
     # from the PERSISTED rows so it is order-independent + reproducible on re-delivery/re-derive.
@@ -128,7 +127,7 @@ async def rebuild_proposals(
 
     nodes: list[dict[str, object]] = []
     code_to_files: dict[str, list[uuid.UUID]] = {}
-    for n, (f, ext, cls) in enumerate(keep):
+    for n, (f, ext, cls) in enumerate(keep, start=1):
         doc_code = extract_doc_code(f.filename, ext.header_block if ext is not None else None)
         conflict_flags: dict[str, object] = {}
         if doc_code:
@@ -156,6 +155,8 @@ async def rebuild_proposals(
         )
         if n % 256 == 0 and heartbeat is not None:
             await heartbeat()
+    if len(keep) % 256 and heartbeat is not None:
+        await heartbeat()
 
     await _detect_conflicts(session, org_id, nodes, code_to_files)
     await repo.replace_proposals(session, run_id, org_id=org_id, nodes=nodes)
@@ -175,19 +176,39 @@ async def run_propose(session: AsyncSession, run_id: uuid.UUID) -> None:
     await session.commit()  # release the FOR UPDATE before the (read-heavy) compute
 
     async def _hb() -> None:
-        if token:
-            await locks.heartbeat(src_hash, token, ttl=settings.import_lock_ttl_seconds)
+        await heartbeat_batch(
+            session,
+            run_id,
+            source_root_hash=src_hash,
+            token=token,
+            expected_status=ImportRunStatus.PROPOSING,
+            ttl=settings.import_lock_ttl_seconds,
+        )
 
     try:
+        await heartbeat_batch(
+            session,
+            run_id,
+            source_root_hash=src_hash,
+            token=token,
+            expected_status=ImportRunStatus.PROPOSING,
+            ttl=settings.import_lock_ttl_seconds,
+            advanced=False,
+        )
         proposal_counts = await rebuild_proposals(
             session, run_id, org_id=org_id, version=version, heartbeat=_hb
         )
         dedup_counts = await repo.compute_dedup_counts(session, run_id)
         final = await repo.get_run(session, run_id, for_update=True)
-        if final is None or final.status is not ImportRunStatus.PROPOSING:
-            await session.rollback()  # a late cancel won → discard the staged proposals
-            if final is not None and final.status is ImportRunStatus.CANCELLED and token:
-                await locks.release(src_hash, token)
+        if (
+            final is None
+            or final.status is not ImportRunStatus.PROPOSING
+            or final.source_root_hash != src_hash
+            or final.lock_token != token
+            or not token
+            or not await locks.is_owned(src_hash, token)
+        ):
+            await session.rollback()  # discard the staged proposals; never read expired final
             return
         final.status = ImportRunStatus.PROPOSED
         final.counts = {**(final.counts or {}), **dedup_counts, **proposal_counts}
@@ -203,6 +224,8 @@ async def run_propose(session: AsyncSession, run_id: uuid.UUID) -> None:
         await session.commit()
         if token:
             await locks.release(src_hash, token)  # end of the continuous scan→…→propose hold
+    except PipelineProgressStopped:
+        await session.rollback()
     except Exception as exc:
         await session.rollback()
         await _fail_run(session, run_id, repr(exc)[:500])

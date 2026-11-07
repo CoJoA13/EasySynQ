@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any, ParamSpec, Protocol, TypeVar, cast
 
 from celery import Celery, bootsteps
+from celery.schedules import crontab
 from celery.signals import beat_init
 
 from ..config import get_settings
@@ -116,7 +117,7 @@ app.conf.update(
         # nightly pg_dump). The gating restore-test drill is run on demand (setup / CLI), not here.
         "backup-nightly": {
             "task": "easysynq.backup.run",
-            "schedule": 86400.0,  # daily
+            "schedule": crontab(minute="*"),  # org cron + persisted watermark decide due work
         },
         # Phase-1 (I-7): scheduled retained-archive verify — decrypt/checksum + DB restore into
         # scratch, then validate manifested locators and hashes against the configured source object

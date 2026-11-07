@@ -23,6 +23,7 @@ from .pep import (
     evaluate_with_context,
     get_authz_audit_sink,
     invalidate_user_permissions,
+    is_system_tier,
     require,
 )
 from .repository import gather_grants, get_permission, granted_permission_keys
@@ -47,6 +48,7 @@ __all__ = [
     "get_permission",
     "granted_permission_keys",
     "invalidate_user_permissions",
+    "is_system_tier",
     "lock_admin_set",
     "lock_admin_set_sync",
     "require",

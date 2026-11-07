@@ -194,6 +194,10 @@ The installer generates a `0600` `.env` with role-separated secrets, derives eve
 origin from the one hostname, runs migrations, authorizes the SPA callback in Keycloak, and blocks
 until `/readyz` is green.
 
+Before creating local deployment artifacts, follow
+[Local installation artifacts](install-online.md#local-installation-artifacts) for the optional
+`infra/compose/compose.site.yml` overlay, its explicit inclusion, and Git ignore protection.
+
 > ⚠️ **Escrow the backup key now.** `BACKUP_ENCRYPTION_KEY` exists **only** in that `0600` `.env`.
 > Copy it into your password manager or key custody process **before** the first backup runs. If it
 > is lost, every encrypted archive is permanently undecryptable and unusable. Keep custody of the key separate
@@ -204,7 +208,9 @@ until `/readyz` is green.
 Because `--tls internal` uses Caddy's own CA, browsers warn until that CA is trusted. Do this before
 users see the app.
 
-Export the root certificate on the Ubuntu host:
+Export the root certificate on the Ubuntu host from the repository root. The command writes the
+ignored `easysynq-root-ca.crt` there; confirm its protection and keep it under operator custody as
+described in [Local installation artifacts](install-online.md#local-installation-artifacts):
 
 ```bash
 docker compose --env-file .env \

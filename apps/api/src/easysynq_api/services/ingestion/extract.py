@@ -31,6 +31,7 @@ from ..vault.staged_identity import (
 from . import locks, storage
 from . import repository as repo
 from .extractor_tika import TikaExtractorProvider
+from .progress import PipelineProgressStopped, heartbeat_batch
 from .service import _fail_run, emit_import_event_system
 
 logger = logging.getLogger("easysynq.ingestion.extract")
@@ -152,20 +153,27 @@ async def run_extract(session: AsyncSession, run_id: uuid.UUID) -> None:
                     extractor_version=result.extractor_version,
                 )
             await session.commit()
-            if token:
-                await locks.heartbeat(src_hash, token, ttl=settings.import_lock_ttl_seconds)
-            # Stop on ANY status change away from Extracting — a cancel, OR a reaper that FAILED a
-            # run whose lock lapsed mid-batch (don't keep writing to a no-longer-active run).
+            await heartbeat_batch(
+                session,
+                run_id,
+                source_root_hash=src_hash,
+                token=token,
+                expected_status=ImportRunStatus.EXTRACTING,
+                ttl=settings.import_lock_ttl_seconds,
+            )
             if await repo.get_status(session, run_id) is not ImportRunStatus.EXTRACTING:
-                if token:
-                    await locks.release(src_hash, token)
-                return
+                raise PipelineProgressStopped
 
         final = await repo.get_run(session, run_id, for_update=True)
-        if final is None or final.status is not ImportRunStatus.EXTRACTING:
-            await session.commit()  # a late cancel won the race — respect it
-            if final is not None and final.status is ImportRunStatus.CANCELLED and token:
-                await locks.release(src_hash, token)
+        if (
+            final is None
+            or final.status is not ImportRunStatus.EXTRACTING
+            or final.source_root_hash != src_hash
+            or final.lock_token != token
+            or not token
+            or not await locks.is_owned(src_hash, token)
+        ):
+            await session.rollback()
             return
         final.status = ImportRunStatus.CLASSIFYING
         emit_import_event_system(
@@ -178,6 +186,8 @@ async def run_extract(session: AsyncSession, run_id: uuid.UUID) -> None:
         )
         await session.commit()
         _enqueue_classify(run_id)  # chain to Stage 3 (lock still held)
+    except PipelineProgressStopped:
+        await session.rollback()
     except Exception as exc:
         await session.rollback()
         await _fail_run(session, run_id, repr(exc)[:500])

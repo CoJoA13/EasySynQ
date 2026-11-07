@@ -26,39 +26,9 @@ EMAIL="${2:-}"; FIRST="${3:-}"; LAST="${4:-}"
 
 [ -f .env ] || { echo "new-keycloak-user: no .env — run scripts/install.sh first" >&2; exit 1; }
 
-# Read .env the way docker compose does. A naive `cut -d=` feeds an inline `# comment` to kcadm as
-# part of the value; a naive comment-strip corrupts a QUOTED value that legitimately contains `#`.
-# Compose strips surrounding quotes and treats a quoted body as literal, so mirror both rules.
-env_val() {
-  local v
-  v="$(grep -m1 "^$1=" .env | cut -d= -f2-)"
-  v="${v%$'\r'}"                                            # tolerate a CRLF .env
-  v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+$//')"      # trim first, so a quote ends the value
-  case "$v" in
-    \"*\"*) v="${v#\"}"; v="${v%%\"*}" ;;                   # quoted: body literal (`#` included); a comment after the closing quote falls off
-    \'*\'*) v="${v#\'}"; v="${v%%\'*}" ;;
-    *) v="$(printf '%s' "$v" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//')" ;;
-  esac
-  printf '%s' "$v" | sed -E 's/^[[:space:]]*//'
-}
-
-PROFILE="$(env_val EASYSYNQ_PROFILE)"; PROFILE="${PROFILE:-s}"
-KC_ADMIN="$(env_val KEYCLOAK_ADMIN_USER)"; KC_ADMIN="${KC_ADMIN:-admin}"
-KC_PW="$(env_val KEYCLOAK_ADMIN_PASSWORD)"
-[ -n "$KC_PW" ] || { echo "new-keycloak-user: KEYCLOAK_ADMIN_PASSWORD is empty in .env" >&2; exit 1; }
-
-# `exec` (not `run`) deliberately: it attaches to the ALREADY-RUNNING keycloak container, so the
-# overlay set does not have to match the deployed one and no container is recreated. `docker compose
-# run` would start dependencies and recreate any whose resolved config differs from this file set.
-#
-# MSYS_NO_PATHCONV=1: on native Windows + Git Bash, MSYS rewrites the container path
-# `/opt/keycloak/bin/kcadm.sh` into a host path (`C:/Program Files/Git/opt/…`) before docker sees it
-# and the exec fails with `exit 127`. Harmless no-op on Linux/macOS.
-kc() {
-  MSYS_NO_PATHCONV=1 docker compose --env-file .env \
-    -f infra/compose/compose.yml -f "infra/compose/compose.${PROFILE}.yml" \
-    exec -T keycloak /opt/keycloak/bin/kcadm.sh "$@" </dev/null
-}
+# Resolve the deployed Compose model once, including all active overlays.
+source scripts/lib/keycloak-admin.sh
+load_keycloak_admin
 
 # ⚠ `-q username=X` is a CONTAINS match: querying `ann` also returns `joann`. Without `exact=true`
 # this would report another account's `sub`, or reset the wrong person's password. Re-verify the

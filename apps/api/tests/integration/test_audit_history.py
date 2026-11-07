@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from testcontainers.postgres import PostgresContainer
 
@@ -65,6 +65,22 @@ def _pg() -> Iterator[str]:
         "postgres:18", username="test", password="test", dbname="test", driver="psycopg"
     ) as pg:
         yield pg.get_connection_url()
+
+
+@pytest.fixture(autouse=True)
+async def _historical_audit_partition(app_under_test: Any, dsns: dict[str, str]) -> None:
+    # These proofs deliberately retain September timestamps. The shared fixture only seeds
+    # the current month and its runway, so explicitly provision the historical month after
+    # app_under_test has migrated this module's database, regardless of the wall clock.
+    engine = create_async_engine(dsns["owner"])
+    try:
+        async with engine.begin() as connection:
+            await connection.execute(
+                text("SELECT easysynq_create_audit_partition(:start)"),
+                {"start": datetime.date(2026, 9, 1)},
+            )
+    finally:
+        await engine.dispose()
 
 
 async def _drive_to_effective(

@@ -348,7 +348,7 @@ A QMS Owner therefore administers *who governs the QMS content* without ever bei
 > *grant* authority. Issuing a new credential for an **existing** identity does not grant anything, yet
 > it hands over that identity outright — so it is bound by the same boundary.
 
-**Resetting another user's credential requires the caller to be system-tier.** Holding the
+**Every existing linked user's credential reset, including the caller's own, requires the caller to be system-tier.** Holding the
 `user.create` permission that gates the reset endpoint is **not** sufficient on its own, because
 `user.create` is grantable independently through a per-user override. The refusal is audited exactly as
 the §4.3 grant refusals are (`two_tier_violation`), attributed to the reset operation rather than to

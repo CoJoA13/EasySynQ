@@ -63,7 +63,7 @@ expect.extend(toHaveNoViolations);
 
 configureTestQueryNotifications();
 
-beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 afterEach(async () => {
   cleanup();
   server.resetHandlers();

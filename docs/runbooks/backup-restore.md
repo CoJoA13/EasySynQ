@@ -10,8 +10,11 @@ pruning, and S3 destinations are also unshipped (D-6).
 
 ## The durable backup archive
 
-`./scripts/easysynq backup run` (and the nightly Beat job `easysynq.backup.run`) writes one timestamped,
-checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy's destination):
+`./scripts/easysynq backup run` writes an immediate timestamped, checksum-verified archive per
+configured policy to `BACKUP_PATH` (or the policy's destination). The Beat task
+`easysynq.backup.run` checks due policies each minute using the stored five-field cron and canonical
+organization timezone (default working calendar, organization, environment, then UTC). Container
+recreation does not move the configured time.
 
 > A configured path is not a certified mount. Setup rejects blank, relative, and URI-looking values
 > and performs a preliminary probe in the API process. The mandatory drill proves current worker
@@ -27,11 +30,44 @@ checksum-verified archive per configured policy to `BACKUP_PATH` (or the policy'
   secret-bearing realm/config legs are attempted. With the key unset or still a placeholder, the
   archive is a **plaintext** `.tar` and those secret-bearing legs are deliberately omitted.
 
+### Scheduled attempts and recovery
+
+Cron supports minute/hour/day-of-month/month/day-of-week, lists, ascending ranges and steps on
+ranges or `*`; three-letter month/day names and Sunday `0`/`7` are accepted. When both day fields
+are restricted, either may match; a wildcard in either combines them as constraints. Invalid or
+impossible schedules log a warning and use daily `02:00` in the resolved organization timezone.
+
+The worker persists `last_scheduled_attempt_at` in UTC; a new/existing policy with no marker starts
+from `created_at`. Downtime produces one catch-up attempt for elapsed slots, then resumes the cron.
+A local time skipped by DST runs at the first valid instant after the gap. Repeated local slots
+run once, including catch-up after downtime during the repeated interval. Dispatch and worker
+availability can delay execution beyond the nominal minute.
+
+A successful or handled failed attempt consumes its start time; failure reporting is preserved,
+and the next scheduled slot retries. A long capture does not consume later slots. Busy claims
+consume nothing. The explicit `backup run` command remains immediate and does not advance the
+scheduled marker. Migration downgrade removes the marker, retaining policy configuration and
+archives; re-upgrade starts from `created_at` again and can produce one catch-up.
+
+Concurrent scheduled workers use a database row claim and a persistent policy lock file in the
+destination. The destination must support shared exclusive advisory file locks for all cooperating
+workers; local tests do not certify any particular NFS/SMB mount. Do not remove the lock file while
+workers may be running. A database disconnect cannot let a second scheduled writer bypass a first
+writer that is still finishing its archive. Lock support/permission failures are reported as backup
+failures rather than silently disabling serialization.
+
+After a crash between archive publication and database commit, the next attempt can reuse a
+checksum-verified completed artifact with matching scheduling metadata and encryption mode.
+Encrypted candidates must also authenticate with the current key. Reuse retains its original capture time and is allowed only if no newer slot
+is due. An old artifact never satisfies a later catch-up. Fresh scheduled archives are staged and
+published with unique timestamp/family suffixes; existing artifacts are retained. This adds no
+retention pruning, recovery completeness, or key-history guarantee.
+
 Read the `backup run` result and `manifest.json` before relying on an artifact: newly written
 manifests record `encrypted`; inspect it and every `legs` value (`realm_export`, `config_snapshot`,
 `audit_checkpoint`). Older manifest-v2 artifacts can omit `encrypted`, so identify their envelope
-from the artifact format/magic and do not infer encryption from field absence. Gate G-C establishes
-none of these properties; it uses a separate transient plaintext tar.
+from the artifact format/magic and do not infer encryption from field absence. Gate G-C does not establish
+the completeness of these durable legs; it uses a separate encrypted transient archive.
 
 > ⚠ **Not a self-contained recovery set:** the archive records blob locators and hashes, but contains
 > **no MinIO object bytes**. Restore verification reads those bytes from the currently configured
@@ -95,13 +131,17 @@ org email flag and the recipient's own preferences).
 >   syslog daemon, and neither bind-mounts the host socket, so a `/dev/log` value would look
 >   configured and reliably fail. Either point it at a collector reachable from the container
 >   (`syslog.internal:514`), or mount the host journald socket into **both** `worker` and `beat` —
->   the two services that run the nightly jobs — via a compose override, then set `/dev/log`:
+>   the two services that run the nightly jobs — by placing this fragment in
+>   `infra/compose/compose.site.yml`, then set `/dev/log`:
 >
 >   ```yaml
 >   services:
 >     worker: { volumes: ["/dev/log:/dev/log"] }
 >     beat:   { volumes: ["/dev/log:/dev/log"] }
 >   ```
+>
+>   Include the file explicitly as described in
+>   [Local installation artifacts](install-online.md#local-installation-artifacts).
 >
 >   Linux hosts with journald only (there is no host `/dev/log` under Docker Desktop). Mounted, this
 >   is the air-gap-friendly choice under D1 — no network egress at all.
@@ -125,8 +165,16 @@ The same channel carries **`integrity.alarm`** from the nightly chain verificati
 
 ## The restore-test drill (gate G-C / AC#5)
 
-`./scripts/easysynq backup restore-test` writes a `pg_dump`/manifest test archive, restores the
-database into a throwaway scratch DATABASE, and copies referenced bytes from the configured source
+`./scripts/easysynq backup restore-test` requires a real `BACKUP_ENCRYPTION_KEY`; an unset or
+placeholder key returns FAIL before dumping the database or writing an archive to the destination.
+It packs the full `pg_dump`/manifest locally, writes only an AES-256-GCM `…tar.enc` and checksum
+sidecar to the backup destination, then re-reads, verifies and decrypts that returned archive locally.
+This exercises the destination with the full archive size. Plaintext packing and extraction stay in
+temporary local storage. The encrypted transient artifact and sidecar are removed best-effort even
+on failure; interrupted cleanup can strand ciphertext. Older plaintext drill residues are not swept
+by a new drill and require operator cleanup. Durable backups' keyless fallback remains unchanged.
+
+The drill restores the database into a throwaway scratch DATABASE and copies referenced bytes from the configured source
 object store into the configured `restore-scratch` bucket. Operators must provision that bucket as
 distinct and non-WORM. The shared guard below checks the destination before any scratch copy.
 It then runs the integrity triad

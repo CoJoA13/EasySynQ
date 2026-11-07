@@ -27,7 +27,7 @@ from .app import task
 @task(name="easysynq.backup.run")
 def backup_run() -> dict[str, Any]:
     """Nightly durable backup of every configured backup_policy (best-effort + logged)."""
-    return asyncio.run(run_scheduled_backups())
+    return asyncio.run(run_scheduled_backups(only_due=True))
 
 
 @task(name="easysynq.backup.restore_test")

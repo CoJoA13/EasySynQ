@@ -21,11 +21,12 @@ Two behaviours are inherited from ``scripts/new-keycloak-user.sh`` and are load-
 from __future__ import annotations
 
 import copy
+import re
 import types
 import uuid
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 
@@ -51,6 +52,13 @@ class KeycloakUnavailable(KeycloakProvisioningError):
     """Keycloak was unreachable or returned an unusable response."""
 
 
+class KeycloakSubjectMissing(KeycloakUnavailable):
+    """Reset could not find the linked identity; existing setup callers still fail closed."""
+
+    def __init__(self) -> None:
+        super().__init__("The linked Keycloak account could not be found")
+
+
 class KeycloakConflict(KeycloakProvisioningError):
     """Keycloak refused the create as a duplicate. ``field`` is ``username`` or ``email``.
 
@@ -72,7 +80,7 @@ class KeycloakConflict(KeycloakProvisioningError):
 class KeycloakRejected(KeycloakProvisioningError):
     """Keycloak refused profile input that cannot succeed unchanged.
 
-    Create uses this for a 4xx other than 409; exact claimed-profile reconciliation also uses it
+    Create uses this for 400/422; exact claimed-profile reconciliation also uses it
     for the provider's 400/409 validation responses. Distinct from ``KeycloakUnavailable``: the
     dependency is reachable. ``detail`` is always bounded and sanitised, never a raw body.
     """
@@ -384,21 +392,41 @@ class KeycloakProvisioningClient:
             raise KeycloakUnavailable(f"Keycloak user create failed: {exc}") from exc
         if response.status_code == 409:
             raise await self._classify_create_conflict(username, response)
-        if 400 <= response.status_code < 500:
-            # Any other 4xx is rejected input, not an outage: the dependency IS reachable, and
-            # retrying the identical form cannot succeed (an invalid email, or a value the realm's
-            # user-profile validation refuses). Never surface the raw body — only a bounded,
-            # sanitised explanation (`_bounded_message`).
+        if response.status_code in (400, 422):
+            # Supported profile-validation statuses reject submitted input. Admin-access failures,
+            # throttling and unexpected endpoint responses need dependency/configuration repair.
+            # Keep the provider's input explanation bounded through `_bounded_message`.
             raise KeycloakRejected(_bounded_message(response))
         if response.status_code not in (200, 201):
             raise KeycloakUnavailable(f"Keycloak user create returned {response.status_code}")
         location = response.headers.get("Location", "")
-        subject = location.rstrip("/").rsplit("/", 1)[-1] if location else ""
-        if subject:
+        try:
+            # urlsplit strips some raw whitespace/control bytes; unquote leaves malformed '%'
+            # escapes untouched. Reject that syntax before either can hide an unusable header.
+            if any(ord(char) <= 0x20 or ord(char) == 0x7F for char in location) or re.search(
+                r"%(?![0-9A-Fa-f]{2})", location
+            ):
+                raise ValueError("malformed Location syntax")
+            parsed = urlsplit(location)
+            parent, _, segment = parsed.path.rpartition("/")
+            # Match the actual collection path, including an optional deployment context path.
+            # A proxy may advertise a different public origin; no request follows this URL.
+            # Subjects remain opaque: validate the resource path, not UUID syntax.
+            subject = (
+                unquote(segment, errors="strict")
+                if parsed.scheme in ("", "http", "https")
+                and not parsed.query
+                and not parsed.fragment
+                and parent == urlsplit(str(response.request.url)).path
+                else ""
+            )
+        except (ValueError, UnicodeError):
+            subject = ""
+        if subject and subject not in (".", ".."):
             return subject
-        # Keycloak normally returns the new id in Location; fall back to an exact re-read.
+        # Missing/malformed Location is not an identity; use the verified exact username lookup.
         lookup = await self.find_user_by_username(username)
-        if not lookup.found or lookup.subject is None:
+        if not lookup.found or not lookup.subject:
             raise KeycloakUnavailable("Keycloak created the account but its id could not be read")
         return lookup.subject
 
@@ -444,10 +472,12 @@ class KeycloakProvisioningClient:
                 headers=headers,
                 json={"type": "password", "value": password, "temporary": True},
             )
+            if response.status_code == 404:
+                raise KeycloakSubjectMissing()
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            # The message must never interpolate `password`.
-            raise KeycloakUnavailable(f"Keycloak set-password failed: {exc}") from exc
+            # Neither credential bytes nor the subject-bearing request URL belongs in the text.
+            raise KeycloakUnavailable("Keycloak set-password failed") from exc
 
 
 def _bootstrap_claim_id(item: dict[str, Any]) -> str | None:

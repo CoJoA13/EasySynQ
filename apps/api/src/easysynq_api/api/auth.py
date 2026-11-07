@@ -14,6 +14,7 @@ from ..auth.dependencies import get_current_user
 from ..config import get_settings
 from ..db.models.app_user import AppUser, ColorScheme
 from ..db.session import get_session
+from ..services.authz import is_system_tier
 from ..services.authz.effective import compute_effective_permissions
 from ..services.common.org_clock import current_org_tz
 
@@ -93,14 +94,18 @@ async def me_permissions(
     out an ordinary author from discovering their own affordances). The optional
     ``scope_level``/``scope_id`` let the UI ask a scoped question (e.g. ``document.create`` at a
     DOC_CLASS). A global SYSTEM answer is coarse — per-document write buttons gate on the document's
-    ``capabilities`` block instead (``GET /documents/{id}``)."""
-    return await compute_effective_permissions(
+    ``capabilities`` block instead (``GET /documents/{id}``). The ``system_tier`` field always
+    evaluates the caller at SYSTEM scope using the same tier rule as the administrative guards,
+    independently of the scope requested for the permission keys."""
+    response = await compute_effective_permissions(
         session,
         user_id=user.id,
         org_id=user.org_id,
         scope_level=scope_level,
         scope_id=scope_id,
     )
+    response["system_tier"] = await is_system_tier(session, user)
+    return response
 
 
 @router.post("/auth/step-up")

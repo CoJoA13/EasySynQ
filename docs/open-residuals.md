@@ -188,29 +188,6 @@ and an optional read-only root filesystem for the application services, which ne
 inventory and is not done.
 Last reviewed: 2026-09-19
 
-## RES-IP-REGISTER-COLUMN-JUMP
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ui-5c, 2026-08-29 (owner-deferred at the S-ui-5 walkthrough close)
-Reason: The interested-parties register's columns change width when the filter selection changes, so
-rows appear to shift sideways between two views of the same data. The cause is
-`table-layout: auto` sizing each enum column to the widest value currently rendered: filtering to a
-subset removes the widest `Category`, `Influence`, `Interest` or `Status` value, the column shrinks,
-and every column after it moves. The known fix is `layout="fixed"` on the register's `Table` with
-pinned pixel widths on those four columns. The adversarial reviewer called pinned widths fragile —
-they rot the moment a label changes or a new enum value is added — and required that the widths be
-harvested LAST, because S-ui-5c's `white-space: nowrap` on `SortableTh` changed the header
-min-content of every register and any width measured before it is stale. The owner reviewed this
-against the other two walkthrough items and deferred it as the lowest-value of the three.
-Closure contract: Either harvest the post-S-ui-5c column widths in a real browser, pin them under
-`layout="fixed"`, and add a Playwright case to `apps/web/e2e/register-table-legibility.spec.ts` that
-measures one column's left edge in two filter states and fails when it moves; or establish that a
-min-width floor per enum column is stable enough without pinning exact widths, and prove that
-instead. jsdom cannot see either, so a Vitest assertion is not acceptable evidence. If neither is
-worth the fragility, record that the columns stay fluid and remove this record.
-Last reviewed: 2026-08-29
-
 ## RES-CAPA-LIST-TABLE-NO-SCROLL-CONTAINER
 
 Status: OPEN
@@ -272,28 +249,6 @@ width where the contract expects one per face, and its per-section assertion fai
 contract for a section whose faces delegate to a frame is part of this record's work, not a surprise
 against it.
 Last reviewed: 2026-09-02 (third blocker closed by S-capa-width-railfoot-order)
-
-## RES-DOC11-TOKEN-DRIFT
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ui-1 to S-ui-3, 2026-08-29
-Reason: `docs/11-ui-ux-design-system.md` now contradicts the shipped design tokens on four points. It
-names Inter as the self-hosted sans and JetBrains Mono as the monospace, where the shipped stack is
-Archivo plus a system monospace; it gives the accent and the focus ring as `#2A6FDB`, where the
-shipped accent is the brand mark's teal and the focus ring is a solid teal token corrected for WCAG
-2.2 SC 1.4.11; and it states shell metrics of a 56px top bar and a 264px rail, where the shipped
-layout tokens are 58px and 244px and `AppShell` now reads them. The accent and focus-ring
-divergences predate this program, but were inert while nothing consumed the tokens; S-ui-1 is the
-slice that made them authoritative, so the divergence is now load-bearing rather than latent. The
-program plan schedules the correction under its final sweep slice, which has not shipped, and a
-deferral recorded only in a plan file is not in the live ledger this document owns.
-Closure contract: Bring doc 11 into agreement with `apps/web/src/theme/tokens.css` for typography,
-accent, focus ring and shell metrics, citing the token names rather than restating literal values so
-the two cannot drift again; or, if a value in doc 11 is the intended design and the token is wrong,
-change the token instead and prove the contrast gate still passes. Either way the fix must name
-which of the two documents is authoritative for a design value.
-Last reviewed: 2026-08-29
 
 ## RES-ARCHIVO-SYMBOL-GLYPHS
 
@@ -378,45 +333,28 @@ case passed on trixie, and the isolated bookworm and trixie runs recorded equiva
 memory and elapsed times with the same bundled expat. The runner still withholds the failed
 assertion, so the cause remains unestablished; this occurrence is intermittent, and the retry does
 not close this record.
-Last reviewed: 2026-09-19
-
-## RES-INTEGRATION-SETUP-ORDER-FAILURE
-
-Status: OPEN
-Owner: Repository owner
-Source: S-recovery-exact-version-binding verification, 2026-09-22, clean `main` worktree `bdfdf95`
-Reason: A full single-process run of the integration suite (`pytest -m integration`) fails
-`tests/integration/test_setup.py::test_authenticated_setup_surface_requires_credential_acknowledgment`
-while every other case passes (1,258 passed / 1 failed on `bdfdf95`); the same tree passes the
-case in CI because the four-way duration-balanced sharding never places it after the test whose
-leftover state it trips on. The failure is therefore order-dependent, masked by shard composition,
-and a `.test_durations` refresh that moves the chunk boundary can surface it in CI without any
-code change.
-Closure contract: Identify the earlier test (or fixture) whose shared-database or process state
-the setup case depends on, make the case self-provide or isolate that precondition so it passes
-in any order, prove the fix with a full single-process integration run and with the specific
-ordering that reproduced the failure, and confirm CI sharding is not relied on. A green sharded
-run alone does not close this record.
-Last reviewed: 2026-09-22
-
-## RES-DEPENDABOT-BACKLOG-TRIAGE
-
-Status: OPEN
-Owner: Repository owner
-Source: S-ci-github-primary (R86), 2026-09-22, after PR #554 merged
-Reason: Dependabot replaced Renovate on 2026-09-21 and refreshed the eight dependency pull
-requests that were open on GitHub from before the 2026-09-08 GitLab move (#478, #541, #543, #547,
-#548, #550, #551, #553). They are live proposals under the adopted updater, not superseded work,
-and none has been reviewed against the current `main`: two pass `gate`, three fail it (the Compose
-image updates redden `compose-images-lock` because `infra/images.lock` digests are manual under
-R86; the web and Redocly groups need a look), and three have no run on the R86 workflow yet.
-Leaving them unreviewed means the accepted-manual losses in R86 are exercised by nobody.
-Closure contract: Each of the eight pull requests is either merged through the gate (with `just
-images-update` run on the branch where the update touches a Compose image) or closed with the
-reason on the thread; the count of open Dependabot pull requests older than the move is zero;
-and the outcome is recorded in dated slice history. A later Dependabot pull request opened after
-this record is ordinary work, not part of it.
-Last reviewed: 2026-09-22
+Progress, 2026-09-25: While verifying the GHCR mirror for
+[`RES-MINIO-UPSTREAM-WITHDRAWN`](#res-minio-upstream-withdrawn), local runs of the same case on
+Ubuntu 26.04 with Docker 29.8.1 failed intermittently, and a temporary, uncommitted assertion
+message exposed the failing check. The case's MinIO provider half passed every time. The synthetic
+probe failed in `_routing`'s `wrong-host-tls` fixture: the `127.0.0.2` server recorded a
+`BrokenPipeError` with no request received, which trips `_server`'s `assert server.errors == []`.
+botocore turns off in-handshake hostname checking and matches the hostname after the handshake,
+so the fixture's TLS accept completes; the client then rejects the hostname and closes, and the
+server's first I/O in its handler thread races that close. Unmodified `origin/main` failed with
+that exact signature in one of four direct runs; the mirror branch failed four of five, and every
+run whose message was exposed showed the same signature, so the mechanism predates the mirror.
+Whether it caused the 2026-09-10 or 2026-09-19 CI failures is unproven, so this record stays OPEN.
+Progress, 2026-10-01 (unmerged candidate): A synthetic local reproduction on unchanged `2997ba6`
+observed 20 correct hostname rejections and 13 fixture failures, all `BrokenPipeError` in the server's
+first buffered read with zero HTTP requests. A deterministic regression reproduces that read-boundary
+failure. The candidate handles only `BrokenPipeError` before any HTTP request line or recorded request
+in explicitly negative TLS fixtures; ordinary fixtures and other TLS/I/O errors still fail. Real
+trusted, untrusted and wrong-host TLS cases and acceptance-runner guards pass (262 focused tests).
+No production transport, diagnostic disclosure, resource limit or mandatory assertion changed.
+Exact-head mandatory acceptance is reported in the associated PR. This fixes the identified local
+fixture mechanism; it does not establish the cause of the historical CI failures or close this record.
+Last reviewed: 2026-10-01
 
 ## RES-TYPESCRIPT-7-UPGRADE
 
@@ -438,47 +376,6 @@ production build, the full Vitest suite and the Playwright browser job — on th
 the measured evidence. Do not disable or downgrade the lint job, pin a second compiler, or treat a
 passing type-check and build as closure while lint is skipped.
 Last reviewed: 2026-09-20
-
-## RES-TESTCONTAINERS-IMPORT-DEPRECATIONS
-
-Status: OPEN
-Owner: Project maintainer
-Source: [S-audit-required-witness-collection runtime evidence](slice-history.md#s-audit-required-witness-collection--fresh-bounded-traversal-diagnostics),
-2026-09-11
-Reason: `apps/api/tests/integration/conftest.py` still imports PostgreSQL, MinIO and Redis fixtures
-from deprecated `testcontainers.postgres`, `testcontainers.minio` and `testcontainers.redis` paths.
-The dated ten-case mandatory runtime evidence reports the three inherited deprecation warnings; there
-is no evidence that the required-witness collection branch introduced them.
-Closure contract: Migrate the three fixture imports to `testcontainers.community.postgres`,
-`testcontainers.community.minio` and `testcontainers.community.redis`, then verify the affected
-PostgreSQL, MinIO and Redis fixtures and mandatory runtime paths complete without those warnings.
-Do not suppress the warnings or treat an unaffected subset as closure evidence.
-Last reviewed: 2026-09-11
-
-## RES-INGEST-PROGRESS
-
-Status: OPEN
-Owner: Repository owner
-Source: Batch 10, PR [#367](https://github.com/CoJoA13/EasySynQ/pull/367)
-Reason: Ingestion reaper — long dedup/propose stages have no incremental progress signal.
-Closure contract: Add a heartbeat-written progress stamp that advances per batch, covering long
-dedup/propose computation and re-delivered scanning, with its required migration and focused reaper proof.
-Last reviewed: 2026-08-08
-
-`reap_stalled_runs`' backstop is anchored on `repo.max_stage_progress`, but only `import_file` (scan) /
-`import_extract` / `import_classification` are written **per batch**. `import_dupe_cluster` and
-`import_proposal_node` are written **once at stage completion** (`replace_dedup_groups` /
-`replace_proposals`), so a long-running `Deduping`/`Proposing` computation still rides the last classify
-row and could in principle be reaped while alive. Bounded in practice: the ~30-minute source-root lock TTL
-is the effective liveness signal against a 6-hour backstop, so lock-liveness protects a genuinely live
-worker first. **Closing it needs** a heartbeat-written progress stamp (a new column or a per-batch row
-write) + a migration — a slice, not a remediation fix. Raised by both Codex and diff-critic on #367;
-documented at `max_stage_progress`.
-
-⚠ Same root cause, also unclosed: a **re-delivered `Scanning` run** re-walks existing paths via
-`upsert_file`, whose conflict-update does NOT touch `created_at`, so the anchor does not advance on a
-replay either. Every one of these needs the same fix — a timestamp that advances per BATCH, not per
-first-insert or per stage-completion.
 
 ## RES-INGEST-PARTIAL-OPTIN
 
@@ -887,192 +784,6 @@ against the current output. `formatTimestamp`'s missing `timeZone` should be fix
 proven on its own: pin a fixed instant and a non-UTC organization zone and assert the rendered day.
 Last reviewed: 2026-09-02
 
-## RES-RESTORE-DRILL-PLAINTEXT-ARCHIVE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #420](https://github.com/CoJoA13/EasySynQ/issues/420), filed 2026-08-03 and
-deferred by owner decision; verified against `3d8613a` on 2026-09-22.
-Reason: `run_drill()` in `apps/api/src/easysynq_api/services/backup/drill.py` proves that the backup
-destination round-trips by packing an unencrypted `easysynq-backup-{stamp}.tar` holding the full
-`pg_dump` into the policy destination, restoring from it, then deleting it best-effort. Only the
-durable backup path produces the AES-256-GCM `*.tar.enc` operators expect there. Every setup-gate and
-operator-triggered drill therefore places the complete database in plaintext on the backup target for
-the drill's duration, and a cleanup failure strands it. Where that target is itself swept by other
-backup tooling, the plaintext copy can leave the host.
-Closure contract: Make the drill write no plaintext database bytes to the destination while it
-still proves the destination can hold and return a full-size archive, for example by encrypting
-the transient archive with the backup key. A small non-database probe does not satisfy this: a
-destination whose quota is below the real archive size would pass it. Prove it with a pg_dump-gated
-integration test that finds no plaintext `easysynq-backup-*.tar` in the destination during or after
-both a passing and a failing drill.
-Last reviewed: 2026-09-22
-
-## RES-SITE-DATA-GUARD-GAPS
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #421](https://github.com/CoJoA13/EasySynQ/issues/421), a deferred review batch
-from 2026-08-03; verified against `3d8613a` on 2026-09-22.
-Reason: `scripts/check-no-site-data.sh` (the R61 mechanical backstop) still misses four shapes: IPv6
-addresses that begin with `::` compression (deliberately unmatched because Python slice syntax such
-as `a[::2]` has the same shape), textual lockfiles (skipped by the `\.lock$` exclusion), lowercase
-MD5 fingerprints (the pattern is uppercase-only), and file names beginning with `-` (most matchers
-pass the file list without a `--` separator).
-Closure contract: Close all four with a context-aware rule for leading `::` that keeps the slice
-false positive out, an evidence-backed lockfile policy, a case-insensitive fingerprint match, and
-`--` on every matcher. Prove each with a failing fixture in `scripts/tests/test-check-no-site-data.sh`
-and a clean run over the full tree.
-Last reviewed: 2026-09-22
-
-## RES-KEYCLOAK-SCRIPT-DOTENV-ESCAPES
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #422](https://github.com/CoJoA13/EasySynQ/issues/422), filed 2026-08-03;
-verified against `3d8613a` on 2026-09-22.
-Reason: The `env_val` helper copied into `scripts/new-keycloak-user.sh` and
-`scripts/clear-keycloak-lockout.sh` ends a double-quoted value at the first `"`, escaped or not.
-Compose resolves `KEYCLOAK_ADMIN_PASSWORD="abc\"def"` to `abc"def`; the helper returns `abc\`, so
-after a rotation to such a value both scripts authenticate with the wrong password. This is the third
-dotenv production the `sed` approximation has had to chase.
-Closure contract: Read the value Compose itself resolves (for example from `docker compose config`)
-or implement the escape grammar once in a shared helper, and extend the extraction test matrix with
-escaped-quote and trailing-backslash cases run against both scripts.
-Last reviewed: 2026-09-22
-
-## RES-SITE-ARTIFACT-GITIGNORE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #423](https://github.com/CoJoA13/EasySynQ/issues/423) item 3, filed
-2026-08-03; items 1 and 2 were mooted when the deployment record they corrected was removed. Verified
-against `3d8613a` on 2026-09-22.
-Reason: The install runbooks tell operators to create site-specific Compose overlays and to export the
-installation root CA as `easysynq-root-ca.crt` inside the working tree, but `.gitignore` covers
-neither. A routine `git add -A` on an operator checkout can therefore stage site data that R61
-forbids in the repository.
-Closure contract: First name one supported location and filename for a site overlay in the install
-runbooks (today they show an inline override fragment without prescribing a path, so no ignore rule
-can be targeted safely, and a wildcard broad enough to cover every valid Compose filename would hide
-tracked files). Then ignore exactly that path and the exported root CA, and prove both with
-`git check-ignore` plus a check that every tracked `infra/compose/compose.*.yml` stays tracked.
-Last reviewed: 2026-09-22
-
-## RES-BACKUP-CRON-IGNORED
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #425](https://github.com/CoJoA13/EasySynQ/issues/425), filed 2026-08-03;
-verified against `3d8613a` on 2026-09-22.
-Reason: The setup wizard stores `backup_policy.cron`, but the Beat entry `backup-nightly` in
-`apps/api/src/easysynq_api/tasks/app.py` runs on a hardcoded `86400.0` interval and nothing reads the
-stored cron. Backups fire 24 hours after Beat last started, so the configured time is never honoured
-and each container recreation moves it.
-Closure contract: Drive the backup schedule from `backup_policy.cron` evaluated in the organization
-timezone (`resolve_org_tz`, R56), fall back safely with a warning on a malformed value, keep the task
-idempotent under redelivery, and prove with a test that the schedule follows the stored cron rather
-than process start time.
-Last reviewed: 2026-09-22
-
-## RES-CREDENTIAL-RESET-R64-ALIGNMENT
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #430](https://github.com/CoJoA13/EasySynQ/issues/430), deferred from PR #429 on
-2026-08-04; the contract text (item 3) has since been aligned. Verified against `3d8613a` on 2026-09-22.
-Reason: R64 rule 5 requires a system-tier caller to reset another user's credential. The roster still
-offers "Issue new temp password" to any caller holding `user.create` (`UsersAdmin.tsx`), so a
-granular-override holder sees an action that always returns `422 two_tier_violation`. The PEP check
-in `services/authz/pep.py` is unconditional (no self exception), while R64 rule 5, its denial
-message and doc 07 §351 say "another user"; doc 07 then justifies system tier for "every reset", and
-the published contract describes the guard as unconditional. The authorities disagree, and choosing
-the weaker reading would change a security boundary.
-Closure contract: Gate the roster action on the same system-tier rule the server enforces, with a
-component test for a granular `user.create` holder. Keep the unconditional guard and correct R64
-rule 5, the denial text and doc 07 to say every reset needs system tier; a self-reset exception is
-out of scope for this record and needs its own owner-approved register amendment first.
-Last reviewed: 2026-09-22
-
-## RES-KEYCLOAK-ERROR-CLASSIFICATION
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #431](https://github.com/CoJoA13/EasySynQ/issues/431), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: `KeycloakProvisioningClient` turns every 4xx on create, including admin-credential 401/403,
-into `KeycloakRejected` (reported as invalid operator input), and turns a 404 from
-`set_temporary_password` into `KeycloakUnavailable` (reported as an outage). A stale identity link
-therefore reads as Keycloak being down, and a broken admin credential reads as a typo.
-Closure contract: Classify a missing subject distinctly, route 401/403 to the
-configuration/availability path, and unit-test each status class. Because no supported operation
-replaces a dead `keycloak_subject` today (`POST /users` creates a separate `app_user`, and the only
-user PATCH changes status), the closure must also either ship an audited relink operation for a
-stale subject, with authorization and a test, or return a response naming the documented manual
-recovery. An error class alone does not close this record.
-Last reviewed: 2026-09-22
-
-## RES-KEYCLOAK-LOCATION-SUBJECT
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #432](https://github.com/CoJoA13/EasySynQ/issues/432), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: After creating a Keycloak user, `keycloak_provisioning.py` trusts any non-empty last path
-segment of the `Location` header as the new subject. The exact-lookup fallback runs only when the
-header is absent, so a malformed `.../users/` yields the subject `users`, and `provision_user`
-commits an `app_user` bound to an account that does not exist.
-Closure contract: Validate the `Location` path itself rather than subject syntax (the repository
-treats `keycloak_subject` as opaque): accept it only when it is the expected
-`.../admin/realms/<realm>/users/<id>` shape with a non-empty final segment, otherwise use the exact
-username lookup, and test the `.../users/` and foreign-path cases.
-Last reviewed: 2026-09-22
-
-## RES-PROVISION-POST-COMMIT-READ-FAILURE
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #433](https://github.com/CoJoA13/EasySynQ/issues/433), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: In `provision_user` (`apps/api/src/easysynq_api/api/users.py`), the `session.refresh(user)`
-and role-name reads run after the first commit with no error handling. If either fails, the account
-and `app_user` exist without a credential and the caller receives a bare 500 without the "user
-created; reissue rather than retry" guidance the credential path gives.
-Closure contract: Map a failure of those reads to the same recoverable response, or build the
-response from values already held, and prove it with a fault-injection test.
-Last reviewed: 2026-09-22
-
-## RES-CREATE-USER-PENDING-EDITS
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #434](https://github.com/CoJoA13/EasySynQ/issues/434), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: `CreateUserModal.tsx` leaves the identity fields editable while the create request is
-pending, and the collision-recovery link reads the live form instead of the submitted values. An
-operator who edits the name or email while waiting can link an existing Keycloak identity to another
-person's metadata.
-Closure contract: Snapshot the submitted values when the create starts and have the link request use
-the snapshot (or disable the fields while pending), with a test that edits during a pending create and
-asserts the link payload.
-Last reviewed: 2026-09-22
-
-## RES-ROLE-PICKER-ROLE-READ
-
-Status: OPEN
-Owner: Repository owner
-Source: [GitHub issue #435](https://github.com/CoJoA13/EasySynQ/issues/435), deferred from PR #429 on
-2026-08-04; verified against `3d8613a` on 2026-09-22.
-Reason: The Create user role picker is gated on `permission.grant`, but its data comes from
-`GET /api/v1/roles`, which requires `role.read`. A granular-override caller without `role.read` sees
-an enabled, silently empty dropdown. The roster's Manage drawer (`UsersAdmin.tsx`) issues the same
-roles query unconditionally for a roster reader, so its "Assign a role" selector fails the same way. The seeded System Administrator holds all three keys, so a
-default install does not hit this.
-Closure contract: In both the Create user modal and the Manage drawer, include `role.read` in the
-role selector's gate or render the denied query as a calm no-access state (`forbidden` flag,
-`retry: false`), with a component test for the denied case on each surface.
-Last reviewed: 2026-09-22
-
 ## RES-UNBOUND-SCOPE-TEMPLATE-ROLES
 
 Status: OPEN
@@ -1114,23 +825,52 @@ headers against 4.x: a native PDF, a scanned PDF with OCR off and on, and a non-
 upgrade the pinned sidecar and remove the Dependabot refusal and its test.
 Last reviewed: 2026-09-22
 
-## RES-HARNESS-PROBE-REQUESTFAILED-RACE
+## RES-REDIS-8-UPGRADE
 
 Status: OPEN
 Owner: Repository owner
-Source: Dependabot PR #587, CI run 35822550793 (2026-09-23): `web browser (Chromium)` failed in
-`e2e/harness-fail-closed-meta.spec.ts` ("default fail-closed interceptor has exact abort and fatal
-outcomes") on a change that touches nothing Playwright executes. It is the only `web-browser`
-failure in the preceding 60 CI runs.
-Reason: The probe (`e2e/harness-fail-closed.probe.spec.ts`) arms
-`page.waitForEvent("requestfailed")` and then triggers a request that the fail-closed interceptor
-aborts and answers with a fatal `throw`. When the fatal ends the test before the pending
-`waitForEvent` settles, Playwright records its "Test ended" rejection as a second error. The meta
-spec then sees two errors instead of exactly one and fails. The interceptor behaves correctly; the
-self-test's exactly-one-error assertion is timing-dependent.
-Closure contract: Make the probe's error set deterministic, for example by settling or explicitly
-handling the pending `requestfailed` wait before the fatal can end the test, without weakening the
-meta spec's exact-outcome assertions (a length check relaxed to "at least one" is not acceptable).
-Prove it by forcing the losing order (delay the event) and showing the meta spec still passes, and
-show that removing the fix reproduces the two-error result.
+Source: Dependabot PR #593 (redis-py 6.4.0 → 8.1.0), closed 2026-09-23 after review.
+Reason: The latest stable kombu (5.6.2, Celery's transport) requires `redis<6.5`. The proposed lock
+therefore moved kombu to the pre-release 5.7.0a1, which no CI job exercises because no test runs a
+Celery worker. redis-py 8 also changes defaults this code relies on: socket timeouts default to 5s
+while the SSE stream waits up to 20s on `get_message`, the wire protocol defaults to RESP3 (pub/sub
+is its most-changed path), and its new type overloads make the two `# type: ignore` comments in
+`redis_client.py` fail mypy. redis-py is capped below 6.5 in `.github/dependabot.yml`, and
+`[tool.uv] prerelease = "disallow"` refuses the alpha outright.
+Closure contract: Once a stable kombu (and Celery) release accepts redis-py 8: lift the Dependabot
+ceiling; remove the stale `# type: ignore` comments; set the SSE client's `socket_timeout`
+explicitly, or prove with an integration test that a subscription idle past 5s still receives
+events; decide RESP2 versus RESP3 deliberately; pin the integration `RedisContainer` image to the
+Compose major; and pass a live check of Beat, a worker consuming a task, and an SSE stream held
+open for over a minute.
 Last reviewed: 2026-09-23
+
+## RES-MINIO-UPSTREAM-WITHDRAWN
+
+Status: OPEN
+Owner: Repository owner
+Source: PR #605's CI run [36093607718](https://github.com/CoJoA13/EasySynQ/actions/runs/36093607718)
+(2026-09-25): the `api` job's mandatory runtime acceptance failed eight of eleven cases on build and
+proof manifests identical to three runs that passed on 2026-09-24.
+Reason: MinIO no longer distributes community images. `minio/minio` and `minio/mc` were deleted from
+Docker Hub around 2026-09-11 (the reason `1daaf42` moved the pins to Quay), Quay has refused
+anonymous pulls of `quay.io/minio/minio` and `quay.io/minio/mc` since about 2026-09-24, and both
+upstream source repositories are archived. The five cases whose fixtures start the object store
+errored in setup, and the three that look up its already-pulled image failed at that lookup; the
+redacted report withholds the exception text, but the split matches those fixtures exactly. Fresh
+installs, air-gap bundle builds and the integration suite were blocked the same way. This is
+unrelated to the unexplained intermittent failures in
+[`RES-AUDIT-RUNTIME-ACCEPTANCE-FAILURE`](#res-audit-runtime-acceptance-failure).
+`infra/images.lock` now pins the project's own GHCR mirror: the linux/amd64 manifests of the
+previously pinned Quay indexes, pushed unmodified from a local pull of those indexes, so each digest
+is upstream's own. The mirror is amd64 only (no other platform's layers were cached) and frozen:
+MinIO publishes no further community releases, so it receives no security fixes.
+Closure contract: Move the pins to a maintained object-store source (a replacement S3-compatible
+store, a maintained MinIO-compatible distribution, or a reproducible source build with a patch
+intake) that preserves Object Lock retention, exact-version reads and the bucket layout the vault,
+records and audit-checkpoint paths rely on. Prove it with the full integration suite, the mandatory
+runtime acceptance and a live smoke of upload, WORM capture and restore. Alternatively, record an
+owner decision that accepts the frozen mirror with an explicit vulnerability-review cadence. Until
+then, keep both GHCR packages public and never delete their versions: nothing else serves these
+digests.
+Last reviewed: 2026-09-25

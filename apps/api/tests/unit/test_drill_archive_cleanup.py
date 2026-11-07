@@ -1,14 +1,11 @@
-"""Pin: the restore drill's transient-archive cleanup removes the plaintext .tar by its
-DETERMINISTIC stamp — so a ``pack_archive`` that fails partway (disk-full / NFS mid-tar or
-mid-sidecar), which never returns a path, still gets cleaned up (Codex P2 on #155).
+"""Drill cleanup is deterministic and handles interrupted ciphertext/sidecar writes.
 
-The drill never encrypts; only ``build_durable_backup`` writes a retained, encrypted archive. So a
-stranded drill ``.tar`` would accumulate PLAINTEXT db dumps in the backup directory, bypassing the
-encryption operators expect — exactly the bypass the P1 fix set out to close, now closed on the
-failure path too.
+Legacy plaintext names remain accepted; unrelated durable/drill artifacts stay untouched.
 """
 
 from pathlib import Path
+
+import pytest
 
 from easysynq_api.services.backup.drill import _unlink_transient_archive
 
@@ -17,21 +14,22 @@ def _touch(d: Path, name: str) -> None:
     (d / name).write_text("plaintext-dump-bytes")
 
 
-def test_removes_tar_and_sidecar_for_the_stamp(tmp_path: Path) -> None:
+@pytest.mark.parametrize("suffix", [".tar", ".tar.enc"])
+def test_removes_tar_and_sidecar_for_the_stamp(tmp_path: Path, suffix: str) -> None:
     stamp = "deadbeefdeadbeefdeadbeefdeadbeef"
-    _touch(tmp_path, f"easysynq-backup-{stamp}.tar")
-    _touch(tmp_path, f"easysynq-backup-{stamp}.tar.sha256")
+    _touch(tmp_path, f"easysynq-backup-{stamp}{suffix}")
+    _touch(tmp_path, f"easysynq-backup-{stamp}{suffix}.sha256")
     _unlink_transient_archive(str(tmp_path), stamp)
     assert sorted(p.name for p in tmp_path.iterdir()) == []
 
 
-def test_removes_partial_tar_when_sidecar_never_written(tmp_path: Path) -> None:
-    """The Codex P2 case: pack_archive wrote the .tar then raised before the .sha256 sidecar — the
-    partial plaintext .tar is still cleaned (it is named by the deterministic stamp)."""
+@pytest.mark.parametrize("suffix", [".tar", ".tar.enc"])
+def test_removes_partial_tar_when_sidecar_never_written(tmp_path: Path, suffix: str) -> None:
+    """An interrupted archive write is cleaned by stamp even before its sidecar exists."""
     stamp = "fdeadbeefdeadbeefdeadbeefdeadbee"
-    _touch(tmp_path, f"easysynq-backup-{stamp}.tar")  # no sidecar — pack_archive raised mid-way
+    _touch(tmp_path, f"easysynq-backup-{stamp}{suffix}")  # no sidecar — archive write interrupted
     _unlink_transient_archive(str(tmp_path), stamp)
-    assert not (tmp_path / f"easysynq-backup-{stamp}.tar").exists()
+    assert not (tmp_path / f"easysynq-backup-{stamp}{suffix}").exists()
 
 
 def test_is_noop_when_nothing_present(tmp_path: Path) -> None:

@@ -23,5 +23,11 @@ export function usePermissions(scope?: { level: string; id?: string }) {
   const allowed = new Set(
     (query.data?.permissions ?? []).filter((p) => p.effect === "ALLOW").map((p) => p.key),
   );
-  return { ...query, can: (key: string) => allowed.has(key) };
+  return {
+    ...query,
+    can: (key: string) => allowed.has(key),
+    // Older servers can omit the tier field; a failed refresh can retain stale data. Both must
+    // hide administrative reset affordances until a successful explicit tier answer is available.
+    isSystemTier: query.isSuccess && query.data?.system_tier === true,
+  };
 }

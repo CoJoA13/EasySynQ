@@ -36,6 +36,14 @@ updates:
       # verification, not an auto-merge (closed PR #271). Stay on 4.x minor/patch.
       - dependency-name: "reportlab"
         update-types: ["version-update:semver-major"]
+      # redis-py is held below 6.5 because the latest STABLE kombu (Celery's transport, 5.6.2)
+      # requires `redis<6.5`. Only the pre-release kombu 5.7.0a1 accepts redis-py 8, so the
+      # redis 6.4 -> 8.1 lock Dependabot proposed (closed PR #593) quietly swapped the Celery
+      # transport for an alpha. redis 8 also defaults sockets to a 5s timeout and to RESP3, both of
+      # which touch the 20s SSE pub/sub wait. Lift this ignore when a stable kombu accepts
+      # redis 8 (RES-REDIS-8-UPGRADE); `[tool.uv] prerelease = "disallow"` refuses the alpha anyway.
+      - dependency-name: "redis"
+        versions: [">=6.5"]
 
   # Web SPA
   - package-ecosystem: "npm"

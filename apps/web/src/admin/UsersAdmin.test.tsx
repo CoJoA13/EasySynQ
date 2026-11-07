@@ -3,12 +3,17 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { expect, test } from "vitest";
-import type { AdminUser, IssuedTemporaryPassword } from "../lib/types";
+import type { AdminUser, IssuedTemporaryPassword, RoleSummary } from "../lib/types";
 import { server } from "../test/msw/server";
+import { flushTestQueryNotifications } from "../test/queryNotifications";
 import { renderWithProviders } from "../test/render";
 import { UsersAdmin } from "./UsersAdmin";
 
 const USER_ID = "us000001-0001-0001-0001-000000000001";
+const EMPLOYEE_ROLE_ID = "ro000001-0001-0001-0001-000000000001";
+const ROLES = [
+  { id: EMPLOYEE_ROLE_ID, name: "Employee", description: null, is_reserved: false },
+] satisfies RoleSummary[];
 const USER = {
   id: USER_ID,
   keycloak_subject: "kc-mara",
@@ -32,21 +37,45 @@ const OTHER_USER = {
   roles: [],
 } satisfies AdminUser;
 
-// Grants `user.create` — the same key the API gates .../temporary-password on — so the Manage
-// drawer's "Issue new temp password" affordance renders (S-user-create Task 8 gates it client-side
-// too, per DP-6: never offer a control the caller cannot exercise).
+// A granular account creator has no system-tier authority to reset existing credentials.
 function grantUserCreate() {
+  grantPermissions(["user.create"]);
+}
+
+function grantResetAuthority() {
+  grantPermissions(["user.create"], true);
+}
+
+function grantPermissions(keys: string[], systemTier = false) {
   server.use(
     http.get("/api/v1/me/permissions", () =>
       HttpResponse.json({
         scope: { level: "SYSTEM", selector: null },
-        permissions: [{ key: "user.create", effect: "ALLOW", source: null }],
+        system_tier: systemTier,
+        permissions: keys.map((key) => ({ key, effect: "ALLOW", source: null })),
       }),
     ),
   );
 }
 
+function serveRoster() {
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+  );
+}
+
+async function settlePermissions(queryClient: QueryClient) {
+  await waitFor(() => {
+    expect(queryClient.getQueryState(["me-permissions", "SYSTEM", null])?.status).toBe("success");
+    expect(queryClient.isFetching()).toBe(0);
+  });
+  await act(async () => flushTestQueryNotifications());
+}
+
 test("a manage action failure renders inside the open user drawer", async () => {
+  grantPermissions(["user.read", "permission.grant", "role.read"]);
   server.use(
     http.get("/api/v1/users", () => HttpResponse.json([USER])),
     http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
@@ -73,6 +102,168 @@ test("a manage action failure renders inside the open user drawer", async () => 
 
   expect(await within(drawer).findByText("Action failed")).toBeInTheDocument();
   expect(within(drawer).getByText("role_conflict: Role already assigned.")).toBeInTheDocument();
+});
+
+test.each([
+  { name: "grant without read", keys: ["user.read", "permission.grant"], cached: false },
+  { name: "read without grant", keys: ["user.read", "role.read"], cached: false },
+  { name: "neither role permission", keys: ["user.read"], cached: false },
+  {
+    name: "grant without read and cached roles",
+    keys: ["user.read", "permission.grant"],
+    cached: true,
+  },
+])("hides role assignment and skips the catalog with $name", async ({ keys, cached }) => {
+  grantPermissions(keys);
+  let catalogRequests = 0;
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.get("/api/v1/roles", () => {
+      catalogRequests += 1;
+      return HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 });
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  if (cached) queryClient.setQueryData(["roles"], ROLES);
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await within(drawer).findByText("No roles assigned.");
+  await settlePermissions(queryClient);
+
+  expect(within(drawer).queryByLabelText("Assign a role")).toBeNull();
+  expect(within(drawer).queryByRole("button", { name: /^Assign$/ })).toBeNull();
+  expect(catalogRequests).toBe(0);
+});
+
+test("revokes an existing assignment with grant authority without catalog read", async () => {
+  grantPermissions(["user.read", "permission.grant"]);
+  let deletedPath: string | undefined;
+  let catalogRequests = 0;
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () =>
+      HttpResponse.json([
+        {
+          id: "assignment-employee",
+          role_id: EMPLOYEE_ROLE_ID,
+          role_name: "Employee",
+          bound_scope: null,
+        },
+      ]),
+    ),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.get("/api/v1/roles", () => {
+      catalogRequests += 1;
+      return HttpResponse.json({ code: "permission_denied", title: "Forbidden" }, { status: 403 });
+    }),
+    http.delete("/api/v1/users/:id/roles/:assignmentId", ({ request }) => {
+      deletedPath = new URL(request.url).pathname;
+      return new HttpResponse(null, { status: 204 });
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  const revoke = await within(drawer).findByRole("button", { name: "Revoke role Employee" });
+  await settlePermissions(queryClient);
+
+  await user.click(revoke);
+
+  await waitFor(() =>
+    expect(deletedPath).toBe(`/api/v1/users/${USER_ID}/roles/assignment-employee`),
+  );
+  expect(catalogRequests).toBe(0);
+});
+
+test("assigns the selected role with grant and read permissions", async () => {
+  grantPermissions(["user.read", "permission.grant", "role.read"]);
+  let assignedPath: string | undefined;
+  let body: unknown;
+  server.use(
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/roles", () => HttpResponse.json(ROLES)),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.post("/api/v1/users/:id/roles", async ({ request }) => {
+      assignedPath = new URL(request.url).pathname;
+      body = await request.json();
+      return HttpResponse.json(
+        {
+          id: "assignment-employee",
+          role_id: EMPLOYEE_ROLE_ID,
+          role_name: "Employee",
+          bound_scope: null,
+        },
+        { status: 201 },
+      );
+    }),
+  );
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />);
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await user.click(await within(drawer).findByLabelText("Assign a role"));
+  await user.click(await screen.findByRole("option", { name: "Employee" }));
+  await user.click(within(drawer).getByRole("button", { name: /^Assign$/ }));
+
+  await waitFor(() => expect(body).toEqual({ role_id: EMPLOYEE_ROLE_ID }));
+  expect(assignedPath).toBe(`/api/v1/users/${USER_ID}/roles`);
+});
+
+test("keeps cached role assignment hidden until both permissions resolve", async () => {
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let permissionsRequested = false;
+  let catalogRequests = 0;
+  server.use(
+    http.get("/api/v1/me/permissions", async () => {
+      permissionsRequested = true;
+      await gate;
+      return HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: ["user.read", "permission.grant", "role.read"].map((key) => ({
+          key,
+          effect: "ALLOW",
+          source: null,
+        })),
+      });
+    }),
+    http.get("/api/v1/users", () => HttpResponse.json([USER])),
+    http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
+    http.get("/api/v1/users/:id/overrides", () => HttpResponse.json([])),
+    http.get("/api/v1/roles", () => {
+      catalogRequests += 1;
+      return HttpResponse.json(ROLES);
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  queryClient.setQueryData(["roles"], ROLES);
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+
+  try {
+    await waitFor(() => expect(permissionsRequested).toBe(true));
+    await within(drawer).findByText("No roles assigned.");
+    await act(async () => flushTestQueryNotifications());
+    expect(within(drawer).queryByLabelText("Assign a role")).toBeNull();
+    expect(within(drawer).queryByRole("button", { name: /^Assign$/ })).toBeNull();
+    expect(catalogRequests).toBe(0);
+  } finally {
+    await act(async () => release?.());
+    await settlePermissions(queryClient);
+  }
+  expect(await within(drawer).findByLabelText("Assign a role")).toBeInTheDocument();
 });
 
 test("revoke and remove controls name the specific assignment they affect", async () => {
@@ -163,7 +354,7 @@ test("the Create user button is absent without user.create (DP-6: no dead contro
 test("the Manage drawer's Issue new temp password action posts to the reissue endpoint for the right user and renders the show-once password", async () => {
   const NEW_PASSWORD = "Zq7-Falcon-Anchor-19";
   let capturedUrl: string | undefined;
-  grantUserCreate();
+  grantResetAuthority();
   server.use(
     http.get("/api/v1/users", () => HttpResponse.json([USER])),
     http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
@@ -196,7 +387,7 @@ test("the Manage drawer's reissued password does not linger in TanStack Query's 
   // close the drawer or unmount ManageUser, so this is the scenario where nothing but an explicit
   // resetMut.reset() scrubs the mutation cache's own retained copy of the password.
   const NEW_PASSWORD = "Zq7-Falcon-Anchor-19";
-  grantUserCreate();
+  grantResetAuthority();
   server.use(
     http.get("/api/v1/users", () => HttpResponse.json([USER])),
     http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
@@ -257,7 +448,7 @@ test("the Issue new temp password action is absent without user.create (DP-6: no
 
 test("switching the Manage drawer directly to a different user does not carry over the previous user's issued password", async () => {
   const MARAS_PASSWORD = "Mara-Only-Secret-1";
-  grantUserCreate();
+  grantResetAuthority();
   server.use(
     http.get("/api/v1/users", () => HttpResponse.json([USER, OTHER_USER])),
     http.get("/api/v1/users/:id/roles", () => HttpResponse.json([])),
@@ -306,7 +497,7 @@ test("the Manage drawer refuses to close while a temporary password issuance is 
   // handler that does not resolve until `release` is called reproduces the "still in flight" window
   // long enough to prove every closing route is blocked for its entire duration.
   const NEW_PASSWORD = "In-Flight-Guard-Pw-7";
-  grantUserCreate();
+  grantResetAuthority();
   let release: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -358,7 +549,7 @@ test("the Manage drawer refuses to close while a temporary password issuance is 
 test("a failed temporary password issuance leaves the Manage drawer closable, not wedged open", async () => {
   // The busy flag is set in resetMut's onMutate and must be cleared in onSettled (fires on BOTH
   // outcomes) — not only in onSuccess — or a failed issuance would wedge the drawer open forever.
-  grantUserCreate();
+  grantResetAuthority();
   let release: (() => void) | undefined;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -428,4 +619,151 @@ test("opening the modal removes the ambiguous duplicate of the Create user butto
   // so there is still only ONE "Create user" button (the header), not a duplicate.
   expect(screen.getAllByRole("button", { name: "Create user" })).toHaveLength(1);
   expect(screen.getByRole("button", { name: "Create" })).toBeInTheDocument();
+});
+
+test("a granular user.create holder can create users but cannot reset credentials", async () => {
+  serveRoster();
+  let resets = 0;
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "user.create", effect: "ALLOW", source: "user_override" }],
+        system_tier: false,
+      }),
+    ),
+    http.post("/api/v1/users/:id/temporary-password", () => {
+      resets += 1;
+      return HttpResponse.json({ code: "two_tier_violation" }, { status: 422 });
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await within(drawer).findByText("No roles assigned.");
+  await settlePermissions(queryClient);
+
+  expect(screen.getByRole("button", { name: "Create user" })).toBeInTheDocument();
+  expect(within(drawer).queryByText("Credentials")).toBeNull();
+  expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
+  expect(resets).toBe(0);
+});
+
+test.each([
+  { name: "system tier without user.create", tier: true, effect: null },
+  { name: "system tier with denied user.create", tier: true, effect: "DENY" },
+  { name: "user.create with missing tier", tier: undefined, effect: "ALLOW" },
+])("hides credential reset for $name", async ({ tier, effect }) => {
+  serveRoster();
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: effect ? [{ key: "user.create", effect, source: "user_override" }] : [],
+        ...(tier === undefined ? {} : { system_tier: tier }),
+      }),
+    ),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await within(drawer).findByText("No roles assigned.");
+  await settlePermissions(queryClient);
+
+  expect(within(drawer).queryByText("Credentials")).toBeNull();
+  expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
+});
+
+test("hides credential reset until server tier authority resolves", async () => {
+  serveRoster();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let requested = false;
+  server.use(
+    http.get("/api/v1/me/permissions", async () => {
+      requested = true;
+      await gate;
+      return HttpResponse.json({
+        scope: { level: "SYSTEM", selector: null },
+        permissions: [{ key: "user.create", effect: "ALLOW", source: "user_override" }],
+        system_tier: true,
+      });
+    }),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  try {
+    await within(drawer).findByText("No roles assigned.");
+    await waitFor(() => expect(requested).toBe(true));
+    await act(async () => flushTestQueryNotifications());
+    expect(queryClient.getQueryState(["me-permissions", "SYSTEM", null])?.status).toBe("pending");
+    expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
+  } finally {
+    await act(async () => release?.());
+    await settlePermissions(queryClient);
+  }
+  expect(within(drawer).getByRole("button", { name: "Issue new temp password" })).toBeInTheDocument();
+});
+
+test("hides credential reset when the permission endpoint fails", async () => {
+  serveRoster();
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({ code: "unavailable", title: "Unavailable" }, { status: 503 }),
+    ),
+  );
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await within(drawer).findByText("No roles assigned.");
+  await waitFor(() => {
+    expect(queryClient.getQueryState(["me-permissions", "SYSTEM", null])?.status).toBe("error");
+    expect(queryClient.isFetching()).toBe(0);
+  });
+  await act(async () => flushTestQueryNotifications());
+
+  expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
+});
+
+test("hides credential reset after a failed refresh retains cached tier authority", async () => {
+  serveRoster();
+  grantResetAuthority();
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const user = userEvent.setup();
+  renderWithProviders(<UsersAdmin token="test-token" />, { queryClient });
+  await user.click(await screen.findByRole("button", { name: "Manage" }));
+  const drawer = await screen.findByRole("dialog");
+  await within(drawer).findByRole("button", { name: "Issue new temp password" });
+  await settlePermissions(queryClient);
+  server.use(
+    http.get("/api/v1/me/permissions", () =>
+      HttpResponse.json({ code: "unavailable", title: "Unavailable" }, { status: 503 }),
+    ),
+  );
+
+  await act(async () => {
+    await queryClient.invalidateQueries({ queryKey: ["me-permissions"] });
+    await flushTestQueryNotifications();
+  });
+  await waitFor(() => {
+    expect(queryClient.getQueryState(["me-permissions", "SYSTEM", null])?.status).toBe("error");
+    expect(queryClient.isFetching()).toBe(0);
+  });
+  await act(async () => flushTestQueryNotifications());
+
+  expect(queryClient.getQueryData(["me-permissions", "SYSTEM", null])).toMatchObject({
+    system_tier: true,
+  });
+  expect(within(drawer).queryByRole("button", { name: "Issue new temp password" })).toBeNull();
 });

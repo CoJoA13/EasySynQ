@@ -50,6 +50,7 @@ from ...problems import ProblemException
 from . import locks, storage
 from . import repository as repo
 from .mime import sniff_mime
+from .progress import PipelineProgressStopped, heartbeat_batch
 from .source import FilesystemSourceProvider, resolve_confined
 
 logger = logging.getLogger("easysynq.ingestion")
@@ -555,21 +556,30 @@ async def run_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
                     mime_type=mime_type,
                 )
             await session.commit()  # per-batch checkpoint (the §11.2 resume granularity)
-            if token:
-                await locks.heartbeat(src_hash, token, ttl=settings.import_lock_ttl_seconds)
-            # Stop on ANY status change away from Scanning — a cancel, OR a reaper that FAILED a run
-            # whose lock lapsed mid-batch (the release is a CAS no-op if already freed).
+            if batch:
+                await heartbeat_batch(
+                    session,
+                    run_id,
+                    source_root_hash=src_hash,
+                    token=token,
+                    expected_status=ImportRunStatus.SCANNING,
+                    ttl=settings.import_lock_ttl_seconds,
+                )
+            # A transition may win immediately after the independent heartbeat commits.
             if await repo.get_status(session, run_id) is not ImportRunStatus.SCANNING:
-                if token:
-                    await locks.release(src_hash, token)
-                return
+                raise PipelineProgressStopped
 
         counts = await repo.compute_counts(session, run_id)
         final = await repo.get_run(session, run_id, for_update=True)
-        if final is None or final.status is not ImportRunStatus.SCANNING:
-            await session.commit()  # a late cancel won the race — respect it
-            if token:
-                await locks.release(src_hash, token)
+        if (
+            final is None
+            or final.status is not ImportRunStatus.SCANNING
+            or final.source_root_hash != src_hash
+            or final.lock_token != token
+            or not token
+            or not await locks.is_owned(src_hash, token)
+        ):
+            await session.rollback()
             return
         final.status = ImportRunStatus.SCANNED
         final.counts = counts
@@ -586,6 +596,8 @@ async def run_scan(session: AsyncSession, run_id: uuid.UUID) -> None:
         )
         await session.commit()
         _enqueue_extract(run_id)  # chain to Stage 2 (best-effort; the reaper backstops a drop)
+    except PipelineProgressStopped:
+        await session.rollback()
     except Exception as exc:
         await session.rollback()
         await _fail_run(session, run_id, repr(exc)[:500])
@@ -685,22 +697,17 @@ async def reap_stalled_runs(
     now: datetime.datetime | None = None,
     max_age_seconds: int | None = None,
 ) -> dict[str, int]:
-    """Flip wedged in-progress runs (every ``_IN_PROGRESS`` state) → FAILED + force-free the
-    source-root lock, so a crashed worker never wedges the root. S-ing-2 primary signal:
-    **lock-liveness** — the lock is held continuously + heartbeated per batch, so a missing lock on
-    an in-progress run means the worker died (the TTL lapsed with no heartbeat). A generous absolute
-    ``import_run_stall_seconds`` backstop covers the rare alive-but-wedged case.
+    """Fail a pipeline run that lost ownership or stopped completing work.
 
-    That backstop is anchored on STAGE PROGRESS (the newest ``import_extract`` /
-    ``import_classification`` row, else ``scan_started_at`` for a run that has produced none yet),
-    mirroring ``reap_stalled_commits``' progress-liveness — NOT on the pipeline-start
-    ``scan_started_at``, which FAILed a large, actively-progressing OCR import the moment it ran
-    past the window and made such a run impossible to ever complete. ``FOR UPDATE SKIP LOCKED``
-    avoids racing a live worker; a Beat job drives this, tests call it directly."""
-    from sqlalchemy import select
+    Completed batches, legacy stage rows and scan start all contribute to the no-progress
+    backstop. Row locking serializes this decision with heartbeats and stage transitions;
+    postcommit CAS cleanup preserves any replacement source-lock owner.
+    """
+    from sqlalchemy import func, select
 
     settings = get_settings()
-    now = now or _now()
+    if now is None:
+        now = (await session.execute(select(func.clock_timestamp()))).scalar_one()
     max_age = max_age_seconds if max_age_seconds is not None else settings.import_run_stall_seconds
     cutoff = now - datetime.timedelta(seconds=max_age)
     candidates = (
@@ -709,17 +716,18 @@ async def reap_stalled_runs(
                 select(ImportRun)
                 .where(ImportRun.status.in_(_IN_PROGRESS))
                 .with_for_update(skip_locked=True)
+                .execution_options(populate_existing=True)
             )
         )
         .scalars()
         .all()
     )
-    hashes: list[str] = []
+    failed_locks: list[tuple[str, str | None]] = []
     for run in candidates:
-        lock_alive = await locks.is_alive(run.source_root_hash)
-        # Progress-liveness backstop: the GREATEST of the newest stage row and scan_started_at (a
-        # run that has not yet produced a stage row is only as old as its start). A run still
-        # emitting extract/classification rows is progressing, however long it has been running.
+        lock_alive = bool(
+            run.lock_token and await locks.is_owned(run.source_root_hash, run.lock_token)
+        )
+        # Keep all legacy evidence alongside the independently committed batch watermark.
         progress = await repo.max_stage_progress(session, run.id)
         anchors = [s for s in (progress, run.scan_started_at) if s is not None]
         anchor = max(anchors) if anchors else None
@@ -729,7 +737,7 @@ async def reap_stalled_runs(
         run.status = ImportRunStatus.FAILED
         run.error = "stage_timeout"
         run.completed_at = now
-        hashes.append(run.source_root_hash)
+        failed_locks.append((run.source_root_hash, run.lock_token))
         emit_import_event_system(
             session,
             run.org_id,
@@ -738,9 +746,10 @@ async def reap_stalled_runs(
             after={"error": "stage_timeout"},
         )
     await session.commit()
-    for src_hash in hashes:
-        await locks.force_release(src_hash)
-    return {"reaped": len(hashes)}
+    for src_hash, token in failed_locks:
+        if token:
+            await locks.release(src_hash, token)
+    return {"reaped": len(failed_locks)}
 
 
 async def reap_stalled_commits(

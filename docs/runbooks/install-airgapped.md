@@ -100,6 +100,10 @@ since it has nothing to compare against.
    by `scripts/app-images.sh --tag`). The production overlay deliberately fails Compose
    interpolation when one is missing.
 
+   For a reviewed local overlay, use `infra/compose/compose.site.yml` and include it explicitly
+   as described in [Local installation artifacts](install-online.md#local-installation-artifacts).
+   Keep the required airgap/offline/production files and `up --no-build` flags above.
+
 ## Container users
 
 The application containers run unprivileged — the api image as `easysynq` (uid/gid **10001**), the

@@ -7,8 +7,8 @@ SEPARATE custody from the app KEK, and **never** written into the archive or VCS
 ``.tar.enc`` is useless without the key (doc 12 §6.2). Uses ``cryptography`` (already a dependency
 for the Ed25519 checkpoints) — no new package.
 
-The restore-into-scratch DRILL (gate G-C) stays plaintext-internal (it writes + reads the archive
-in one process). Durable archives use this module only when the key is configured; otherwise the
+The restore-into-scratch DRILL (gate G-C) requires a configured key and encrypts before writing
+to the destination. Durable archives use this module only when the key is configured; otherwise the
 caller writes a plaintext fallback. ``decrypt_archive`` is the seam the S11 ``easysynq restore``
 calls before unpacking an encrypted artifact.
 """

@@ -108,3 +108,52 @@ async def test_me_permissions_scope_param_refines_answer(
     assert folderq["scope"]["level"] == "FOLDER"
     by_key = {p["key"]: p for p in folderq["permissions"]}
     assert by_key["document.read"]["effect"] == "ALLOW"
+
+
+async def test_me_permissions_reports_granular_user_create_as_non_system_tier(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"kc-granular-create-{uuid.uuid4().hex[:10]}"
+    await _grant_keys(subject, ["user.create"])
+
+    response = await app_client.get("/api/v1/me/permissions", headers=_auth(token_factory, subject))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    by_key = {entry["key"]: entry for entry in body["permissions"]}
+    assert by_key["user.create"]["effect"] == "ALLOW"
+    assert "user.read" not in by_key
+    assert body.get("system_tier") is False
+
+
+async def test_me_permissions_reports_content_only_grant_as_non_system_tier(
+    app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"kc-content-tier-{uuid.uuid4().hex[:10]}"
+    await s5.grant_role(subject, "QMS Owner")
+    await _grant_keys(subject, ["user.create"])
+
+    response = await app_client.get("/api/v1/me/permissions", headers=_auth(token_factory, subject))
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    by_key = {entry["key"]: entry for entry in body["permissions"]}
+    assert by_key["user.create"]["effect"] == "ALLOW"
+    assert by_key["permission.grant"]["effect"] == "ALLOW"
+    assert body.get("system_tier") is False
+
+
+@pytest.mark.parametrize("query", ["", "?scope_level=FOLDER&scope_id=sample"])
+async def test_me_permissions_reports_system_tier_independently_of_requested_scope(
+    query: str, app_client: AsyncClient, token_factory: Callable[..., str]
+) -> None:
+    subject = f"kc-system-tier-{uuid.uuid4().hex[:10]}"
+    await s5.grant_role(subject, "System Administrator")
+
+    response = await app_client.get(
+        f"/api/v1/me/permissions{query}", headers=_auth(token_factory, subject)
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["scope"]["level"] == ("FOLDER" if query else "SYSTEM")
+    assert response.json().get("system_tier") is True
