@@ -13,6 +13,7 @@ import {
   SegmentedControl,
   Select,
   Table,
+  Tabs,
   TextInput,
   type VariantColorsResolver,
 } from "@mantine/core";
@@ -258,6 +259,14 @@ export const theme = createTheme({
         borderColor: "var(--es-border)",
         highlightOnHoverColor: "var(--es-surface-2)",
         stripedColor: "var(--es-surface-2)",
+      },
+    }),
+    // Sub-register tab strips (CAPA, Audits, Drift) and the document-detail tabs: 14px/500 labels
+    // with the accent underline, on the hairline rule.
+    Tabs: Tabs.extend({
+      styles: {
+        list: { borderColor: "var(--es-border)" },
+        tab: { fontWeight: 500, paddingInline: 4, marginInlineEnd: 16 },
       },
     }),
     // The rail: a quiet row that fills with the accent tint when active (Figma NavItem).

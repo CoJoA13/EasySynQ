@@ -1,11 +1,4 @@
-import {
-  Anchor,
-  Box,
-  Button,
-  Container,
-  Select,
-  Table,
-} from "@mantine/core";
+import { Anchor, Box, Button, Container, Select, Table } from "@mantine/core";
 import { useOrgDate } from "../../app/shell/useOrgDate";
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -29,6 +22,16 @@ import { InitiativeStageBadge } from "./InitiativeStageBadge";
 import { INITIATIVE_STAGE_META, SOURCE_LABEL } from "./labels";
 import { RaiseInitiativeModal } from "./RaiseInitiativeModal";
 import { useInitiatives } from "./hooks";
+
+// S-ui-redesign page anatomy: the PDCA phase and clause range as the eyebrow, and one sentence on
+// what the register is for. Shared by the loaded, forbidden and error branches so the page names
+// itself the same way whatever it can show.
+const HEADER = {
+  title: "Improvement",
+  eyebrow: "Act · Cl 10.3",
+  description:
+    "Continual-improvement initiatives, their source, owner and stage from open to closed.",
+} as const;
 
 const STAGES: InitiativeStage[] = ["Open", "InProgress", "Completed", "Closed", "Cancelled"];
 const SOURCES: InitiativeSource[] = ["OFI", "review", "manual"];
@@ -113,7 +116,7 @@ export function ImprovementRegisterPage() {
   if (forbidden) {
     return (
       <Container size="xl" py="md">
-        <RegisterPageHeader title="Improvement" />
+        <RegisterPageHeader {...HEADER} />
         <NoAccessState message="You don't have access to the improvement register. It's available to roles holding the improvement read permission." />
       </Container>
     );
@@ -128,7 +131,7 @@ export function ImprovementRegisterPage() {
   if (isError) {
     return (
       <Container size="xl" py="md">
-        <RegisterPageHeader title="Improvement" />
+        <RegisterPageHeader {...HEADER} />
         <ErrorState title="Couldn't load improvement initiatives" onRetry={() => void refetch()} />
       </Container>
     );
@@ -137,10 +140,12 @@ export function ImprovementRegisterPage() {
   return (
     <Container size="xl" py="md">
       <RegisterPageHeader
-        title="Improvement"
-        actions={can("improvement.manage") && (
-          <Button onClick={() => setRaising(true)}>New initiative</Button>
-        )}
+        {...HEADER}
+        actions={
+          can("improvement.manage") && (
+            <Button onClick={() => setRaising(true)}>New initiative</Button>
+          )
+        }
         updatedAt={dataUpdatedAt}
       />
       <TruncationNotice truncated={truncated} noun="initiatives" />

@@ -39,6 +39,16 @@ import { ContextIssueDrawer } from "./ContextIssueDrawer";
 import { NewIssueModal } from "./NewIssueModal";
 import { RegisterLifecyclePanel } from "./RegisterLifecyclePanel";
 
+// S-ui-redesign page anatomy: the PDCA phase and clause range as the eyebrow, and one sentence on
+// what the register is for. Shared by the loaded, forbidden and error branches so the page names
+// itself the same way whatever it can show.
+const HEADER = {
+  title: "Context of the organization",
+  eyebrow: "Plan · Cl 4.1",
+  description:
+    "Internal and external issues relevant to the QMS, classified by SWOT and reviewed on a cadence.",
+} as const;
+
 const SORT_KEYS = ["classification", "category", "status", "reviewed"] as const;
 type SortKey = (typeof SORT_KEYS)[number];
 
@@ -136,7 +146,7 @@ export function ContextRegisterPage() {
   if (forbidden) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Context of the organization" />
+        <RegisterPageHeader {...HEADER} />
         <NoAccessState message="You don't have access to the Context register." />
       </Container>
     );
@@ -144,7 +154,7 @@ export function ContextRegisterPage() {
   if (isError) {
     return (
       <Container size="lg" py="md">
-        <RegisterPageHeader title="Context of the organization" />
+        <RegisterPageHeader {...HEADER} />
         <ErrorState
           title="Couldn't load the context register"
           message="Something went wrong. Please try again."
@@ -164,10 +174,11 @@ export function ContextRegisterPage() {
   return (
     <Container size="lg" py="md">
       <RegisterPageHeader
-        title="Context of the organization"
-        actions={headEditable && canManage && (
-          <Button onClick={() => setCreateOpen(true)}>New issue</Button>
-        )}
+        {...HEADER}
+        actions={
+          headEditable &&
+          canManage && <Button onClick={() => setCreateOpen(true)}>New issue</Button>
+        }
         updatedAt={dataUpdatedAt}
       />
       {banner && (

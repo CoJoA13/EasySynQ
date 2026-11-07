@@ -1,4 +1,4 @@
-import { Alert, Button, Container, Group, Title } from "@mantine/core";
+import { Alert, Button, Container, Group } from "@mantine/core";
 import { useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import { ApiError } from "../../lib/api";
@@ -13,6 +13,7 @@ import {
 } from "./recordUrlState";
 import { RecordFilters } from "./RecordFilters";
 import { RecordsTable } from "./RecordsTable";
+import { RegisterPageHeader } from "../../lib/RegisterPageHeader";
 
 export function RecordsPage() {
   const [params, setParams] = useSearchParams();
@@ -38,9 +39,11 @@ export function RecordsPage() {
     records.error.problem?.title === "Invalid records cursor";
   return (
     <Container size="xl" py="md">
-      <Title order={1} size="h2" mb="md">
-        Records
-      </Title>
+      <RegisterPageHeader
+        eyebrow="Do · Cl 7.5.3"
+        title="Records"
+        description="Evidence captured under controlled documents — sealed, retained and dispositioned per policy."
+      />
       <RecordFilters value={state} onChange={setCriteria} onClear={clearAll} />
       {records.isLoading && <LoadingState label="Loading records" />}
       {invalidCursor && (

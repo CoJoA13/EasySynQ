@@ -31,6 +31,16 @@ import { AuditStateBadge } from "./badges";
 import { useAudits } from "./hooks";
 import { NewAuditModal } from "./NewAuditModal";
 
+// S-ui-redesign page anatomy: the PDCA phase and clause range as the eyebrow, and one sentence on
+// what the register is for. Shared by the loaded, forbidden and error branches so the page names
+// itself the same way whatever it can show.
+const HEADER = {
+  title: "Internal audit",
+  eyebrow: "Check · Cl 9.2",
+  description:
+    "Audits scheduled from the program, their lead auditor, lifecycle state and findings.",
+} as const;
+
 function leadLabel(userId: string | null, directory: DirectoryUser[]): string {
   if (!userId) return "—";
   return directory.find((u) => u.id === userId)?.display_name ?? `${userId.slice(0, 8)}…`;
@@ -103,7 +113,7 @@ export function AuditsListPage() {
   if (forbidden) {
     return (
       <Container size="xl" py="md">
-        <RegisterPageHeader title="Internal audit" />
+        <RegisterPageHeader {...HEADER} />
         <NoAccessState
           message={
             <>
@@ -125,7 +135,7 @@ export function AuditsListPage() {
   if (isError) {
     return (
       <Container size="xl" py="md">
-        <RegisterPageHeader title="Internal audit" />
+        <RegisterPageHeader {...HEADER} />
         <ErrorState title="Couldn't load audits" onRetry={() => refetch()} />
       </Container>
     );
@@ -145,7 +155,7 @@ export function AuditsListPage() {
   return (
     <Container size="xl" py="md">
       <RegisterPageHeader
-        title="Internal audit"
+        {...HEADER}
         actions={can("audit.create") && <Button onClick={() => setNewOpen(true)}>New audit</Button>}
         updatedAt={dataUpdatedAt}
       />
